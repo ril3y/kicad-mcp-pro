@@ -16,18 +16,36 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: "lts/*"
+
       - run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+
       - env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ -z "${BASE_SHA}" ] || [ -z "${HEAD_SHA}" ]; then
-            echo "Commitlint only runs for pull_request events."
+          if [ "${EVENT_NAME}" = "merge_group" ]; then
+            echo "Skipping commitlint for merge_group event."
             exit 0
           fi
+
+          case "${HEAD_REF}" in
+            release-please--*)
+              echo "Skipping commitlint for release-please branch: ${HEAD_REF}"
+              exit 0
+              ;;
+          esac
+
+          if [ -z "${BASE_SHA}" ] || [ -z "${HEAD_SHA}" ]; then
+            echo "Commitlint only runs when pull_request base/head SHAs are available."
+            exit 0
+          fi
+
           npx commitlint --from "${BASE_SHA}" \
                          --to "${HEAD_SHA}" \
                          --verbose
