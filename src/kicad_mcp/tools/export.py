@@ -100,11 +100,27 @@ def _with_low_level_export_notice(message: str) -> str:
 
 def _active_variant_args(variant_name: str | None = None) -> list[str]:
     try:
-        return variant_apply_to_kicad_cli_args(variant_name)
+        args = variant_apply_to_kicad_cli_args(variant_name)
     except ValueError:
         if variant_name:
             raise
         return []
+    if not args:
+        return args
+    # ``--variant`` was added to ``kicad-cli`` in KiCad 10.  Earlier CLIs (9.x
+    # and below) reject it as ``Unknown argument`` and abort the export.  The
+    # ``default`` variant is a synthetic no-op baseline that adds no overrides,
+    # so suppress it unconditionally; for explicit non-default variants, gate
+    # on the local CLI's advertised capability.
+    if args == ["--variant", "default"]:
+        return []
+    try:
+        caps = get_cli_capabilities(get_config().kicad_cli)
+    except Exception:
+        return args
+    if not caps.supports_cli_variant:
+        return []
+    return args
 
 
 async def _report_progress(
@@ -389,7 +405,7 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
         out_dir = _ensure_output_dir()
         out_file = out_dir / "schematic.pdf"
         variant_args = _active_variant_args()
-        code, _, stderr = _run_cli_variants(
+        code, stdout, stderr = _run_cli_variants(
             [
                 ["sch", "export", "pdf", *variant_args, "--output", str(out_file), str(sch_file)],
                 [
@@ -405,7 +421,7 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
             ]
         )
         if code != 0:
-            return f"Schematic PDF export failed: {stderr or 'unknown error'}"
+            return f"Schematic PDF export failed: {stderr or stdout or 'unknown error'}"
         return f"Schematic PDF exported to {out_file}"
 
     @headless_compatible
