@@ -6,6 +6,14 @@
 .github/rulesets/**                     @oaslananka
 .actrc                                  @oaslananka
 
+# Marketplace apps, external checks, and repository policy
+.github/CODEOWNERS                      @oaslananka
+.semgrep/**                             @oaslananka
+renovate.json                           @oaslananka
+codecov.yml                             @oaslananka
+docs/repository-apps.md                 @oaslananka
+docs/security/marketplace-app-policy.md @oaslananka
+
 # Release and packaging pipeline
 scripts/release_publish.py              @oaslananka
 scripts/sync_mcp_metadata.py            @oaslananka

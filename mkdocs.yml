@@ -67,6 +67,7 @@ nav:
       - Repository and CI/CD Topology: deployment/repository-topology.md
       - Autonomy Model: autonomy.md
       - Repository Operations: repository-operations.md
+      - Repository Apps: repository-apps.md
       - Doppler Setup: doppler-setup.md
       - Branch Protection: branch-protection.md
       - Jules CI Bridge: deployment/jules-ci-bridge.md
@@ -74,6 +75,7 @@ nav:
       - Docker: deployment/docker.md
       - HTTP Mode: deployment/http-mode.md
       - Security: deployment/security.md
+      - Marketplace App Policy: security/marketplace-app-policy.md
       - Threat Model: security/threat-model.md
       - Release Process: release-process.md
   - Workflows:

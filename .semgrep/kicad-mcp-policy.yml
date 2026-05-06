@@ -1,0 +1,68 @@
+rules:
+  - id: github-actions-no-workflow-run
+    message: Avoid workflow_run for privileged workflows. Use workflow_dispatch or a trusted protected trigger.
+    severity: WARNING
+    languages:
+      - yaml
+    paths:
+      include:
+        - .github/workflows/*.yml
+        - .github/workflows/*.yaml
+    pattern-regex: '^\s*workflow_run\s*:'
+    metadata:
+      category: security
+      technology:
+        - github-actions
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+
+  - id: python-no-deprecated-kicad-pcbnew
+    message: Deprecated KiCad pcbnew/SWIG API usage is not allowed; use KiCad CLI/IPC-backed adapters.
+    severity: ERROR
+    languages:
+      - python
+    patterns:
+      - pattern-either:
+          - pattern: import pcbnew
+          - pattern: from pcbnew import $X
+          - pattern: pcbnew.$ATTR(...)
+    metadata:
+      category: compatibility
+      technology:
+        - kicad
+
+  - id: python-no-subprocess-shell-true
+    message: Avoid subprocess shell=True; use argv lists and reviewed execution wrappers.
+    severity: WARNING
+    languages:
+      - python
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+    metadata:
+      category: security
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+
+  - id: python-no-token-in-diagnostic-response
+    message: Do not expose token values in health or doctor diagnostics; return configured booleans only.
+    severity: WARNING
+    languages:
+      - python
+    paths:
+      include:
+        - src/kicad_mcp/diagnostics.py
+        - src/kicad_mcp/server.py
+        - src/kicad_mcp/config.py
+    patterns:
+      - pattern-either:
+          - pattern: '"auth_token": $VALUE'
+          - pattern: '"kicad_token": $VALUE'
+      - pattern-not: '"auth_token": {"configured": ...}'
+      - pattern-not: '"kicad_token": {"configured": ...}'
+    metadata:
+      category: security
+      cwe:
+        - "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
