@@ -15,6 +15,8 @@ module.exports = {
         "chore",
         "build",
         "ci",
+        "registry",
+        "package",
         "revert",
         "security",
         "deps",

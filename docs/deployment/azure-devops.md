@@ -1,10 +1,15 @@
 # Azure DevOps Manual CI/CD
 
-Azure DevOps is a manual fallback and release-support surface for this repository. Automated GitHub CI/CD is owned by the `oaslananka-lab` organization mirror, while the personal `oaslananka` GitHub repository remains the main source repository.
+Azure DevOps is a manual compatibility fallback and release-support surface for
+teams that mirror this repository into Azure DevOps. Automated GitHub CI/CD is
+owned by the `oaslananka-lab` organization mirror, while the personal
+`oaslananka` GitHub repository remains the main source repository.
 
 ## Pipeline Definition
 
-The primary Azure pipeline definition lives in the repository root as `azure-pipelines.yml`.
+The compatibility Azure pipeline definitions live under `.azure/pipelines/`.
+The canonical CI pipeline remains `.github/workflows/ci.yml`; Azure files are
+not the authoritative project CI.
 
 It covers:
 
@@ -24,7 +29,8 @@ Doppler should contain:
 - `TEST_PYPI_TOKEN`
 - `SAFETY_API_KEY`
 
-The root `azure-pipelines.yml` still supports native Azure variables as a fallback:
+The compatibility Azure publish pipeline still supports native Azure variables
+as a fallback:
 
 - `PYPI_TOKEN`
 - `TEST_PYPI_TOKEN`
@@ -41,10 +47,12 @@ You can store these in a variable group if you want to share them across multipl
 
 ## GitHub Workflows
 
-The repository includes GitHub workflows that are automatic only in the `oaslananka-lab` organization mirror and manual elsewhere:
+The repository includes GitHub workflows that are automatic only in the
+`oaslananka-lab` organization mirror and manual elsewhere:
 
 - `.github/workflows/ci.yml`
 - `.github/workflows/security.yml`
-- `.github/workflows/publish.yml`
+- `.github/workflows/release.yml`
 
-`ci.yml` and `security.yml` run on `push` and `pull_request` only when `github.repository_owner == 'oaslananka-lab'`. `publish.yml` remains manual because package publication should require a human release decision.
+Release publishing is handled by `.github/workflows/release.yml` in the org repo
+through PyPI Trusted Publishing.

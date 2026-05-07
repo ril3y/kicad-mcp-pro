@@ -1,0 +1,75 @@
+name: Jules Issue Agent
+
+on:
+  issues:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: jules-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    name: Ask Jules to work on trusted issue
+    if: >-
+      github.repository == 'oaslananka-lab/kicad-mcp-pro' &&
+      contains(fromJSON('["oaslananka"]'), github.event.issue.user.login) &&
+      contains(fromJSON('["jules","bug","ci-fix","dependency-fix"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    env:
+      HAS_JULES_API_KEY: ${{ secrets.JULES_API_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Validate Jules configuration
+        run: |
+          set -euo pipefail
+          if [ "${HAS_JULES_API_KEY}" != "true" ]; then
+            echo "JULES_API_KEY is not configured; issue agent is skipped."
+            exit 0
+          fi
+
+      - name: Invoke Jules
+        if: env.HAS_JULES_API_KEY == 'true'
+        uses: google-labs-code/jules-action@bff7875eaa123cac6742b7cfc51005b95ba4d566 # v1.0.0
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: main
+          include_last_commit: false
+          include_commit_log: true
+          prompt: |
+            A trusted allowlisted maintainer labeled an issue for Jules in oaslananka-lab/kicad-mcp-pro.
+
+            Issue:
+            - Number: ${{ github.event.issue.number }}
+            - Title: ${{ github.event.issue.title }}
+            - URL: ${{ github.event.issue.html_url }}
+            - Label: ${{ github.event.label.name }}
+
+            Diagnose the issue, implement a minimal fix, add regression tests when applicable, run validation, and open or update a PR.
+
+            Hard constraints:
+            - Do not publish anything.
+            - Do not merge anything.
+            - Do not modify secrets or variables.
+            - Do not weaken CI, tests, coverage, lint, type, workflow, or security gates.
+            - Do not alter release workflows unless the issue explicitly requests it and the fix is minimal.
+            - Do not run release, PyPI/TestPyPI, Docker/GHCR, npm, Homebrew, Scoop, MCP registry, GitHub Release, SBOM, Sigstore, or attestation publishing.
+            - Include exact commands run and results in the PR body.
+
+            Required validation:
+            - corepack npm ci
+            - uv sync --all-extras --frozen
+            - uv run python -m pytest tests/unit/ -q
+            - uv run ruff format --check src/ tests/ scripts/
+            - uv run ruff check src/ tests/ scripts/
+            - uv run python -m mypy src/kicad_mcp/
+            - corepack npm run workflows:lint
+            - uv run python scripts/validate_mcp_manifest.py, if present

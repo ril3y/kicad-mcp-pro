@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 MCP_JSON = ROOT / "mcp.json"
 SERVER_JSON = ROOT / "server.json"
+MCP_SERVER_NAME = "io.github.oaslananka-lab/kicad-mcp-pro"
+GHCR_IMAGE = "ghcr.io/oaslananka-lab/kicad-mcp-pro"
 
 
 def _license_text(project: dict[str, Any]) -> str:
@@ -51,19 +53,27 @@ def _dump_json(data: dict[str, Any]) -> str:
 
 def _updated_mcp_json(metadata: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
     updated = deepcopy(original)
+    updated["name"] = MCP_SERVER_NAME
+    updated["title"] = "KiCad MCP Pro"
+    updated["display_name"] = "KiCad MCP Pro"
     updated["description"] = (
-        "Compatibility metadata for KiCad MCP Pro. Prefer server.json for official MCP "
-        "Registry publication."
+        "MCP server for KiCad schematic, PCB, validation, DFM, and export workflows."
     )
     updated["version"] = metadata["version"]
     updated["license"] = metadata["license"]
-    updated["repository"] = metadata["repository"]
-    updated["homepage"] = metadata["homepage"]
+    updated["repository"] = {
+        "url": metadata["repository"],
+        "source": "github",
+    }
+    updated["websiteUrl"] = metadata["homepage"]
+    _sync_package_versions(updated, metadata)
     return updated
 
 
 def _updated_server_json(metadata: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
     updated = deepcopy(original)
+    updated["name"] = MCP_SERVER_NAME
+    updated["title"] = "KiCad MCP Pro"
     updated["description"] = metadata["description"]
     updated["version"] = metadata["version"]
     updated["repository"] = {
@@ -72,10 +82,24 @@ def _updated_server_json(metadata: dict[str, Any], original: dict[str, Any]) -> 
     }
     updated["websiteUrl"] = metadata["homepage"]
     updated["license"] = metadata["license"]
-    for package in updated.get("packages", []):
-        if isinstance(package, dict) and package.get("identifier") == metadata["package_name"]:
-            package["version"] = metadata["version"]
+    _sync_package_versions(updated, metadata)
     return updated
+
+
+def _sync_package_versions(data: dict[str, Any], metadata: dict[str, Any]) -> None:
+    for package in data.get("packages", []):
+        if not isinstance(package, dict):
+            continue
+        if (
+            package.get("identifier") == metadata["package_name"]
+            or package.get("name") == metadata["package_name"]
+        ):
+            package["version"] = metadata["version"]
+        if package.get("registryType") == "oci" or package.get("registry") == "container":
+            package["version"] = metadata["version"]
+            package["identifier"] = f"{GHCR_IMAGE}:{metadata['version']}"
+            if "image" in package:
+                package["image"] = GHCR_IMAGE
 
 
 def _planned_updates() -> dict[Path, str]:

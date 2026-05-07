@@ -52,6 +52,12 @@ def update_json(path: Path, version: str) -> None:
     for package in data.get("packages", []):
         if isinstance(package, dict) and "version" in package:
             package["version"] = version
+        if isinstance(package, dict) and (
+            package.get("registryType") == "oci" or package.get("registry") == "container"
+        ):
+            image = package.get("image")
+            if isinstance(image, str) and image:
+                package["identifier"] = f"{image}:{version}"
 
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 

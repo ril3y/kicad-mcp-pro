@@ -101,11 +101,14 @@ def test_cli_failure_tools_are_structured_error_candidates() -> None:
         "export_gerber",
         "get_board_stats",
         "pcb_export_3d_pdf",
-        "route_autoroute_freerouting",
-        "route_import_ses",
     }
 
     assert expected.issubset(CLI_FAILURE_TOOL_NAMES)
+    # route_* tools return ToolResult directly; failures are encoded in ok=False,
+    # not intercepted by the string-match layer.
+    assert "route_export_dsn" not in CLI_FAILURE_TOOL_NAMES
+    assert "route_autoroute_freerouting" not in CLI_FAILURE_TOOL_NAMES
+    assert "route_import_ses" not in CLI_FAILURE_TOOL_NAMES
 
 
 def test_audit_log_records_keys_without_sensitive_values(monkeypatch) -> None:
@@ -403,16 +406,64 @@ def test_pdn_mesh_reports_ac_impedance_violations() -> None:
     assert result.impedance_violations
 
 
-def test_release_workflow_uses_scoped_github_publish_secrets() -> None:
+def test_release_workflow_uses_trusted_publishing() -> None:
     workflow = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
     ).read_text(encoding="utf-8")
 
-    assert "Verify required release secrets" in workflow
-    assert "PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}" in workflow
-    assert "TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}" in workflow
-    assert "bash scripts/publish.sh" in workflow
-    assert "doppler run --project all --config main -- bash scripts/publish.sh" not in workflow
+    assert "id-token: write" in workflow
+    assert "pypa/gh-action-pypi-publish@" in workflow
+    assert "repository-url: https://test.pypi.org/legacy/" in workflow
+    assert "Verify required release secrets" not in workflow
+    assert "PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}" not in workflow
+    assert "TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}" not in workflow
+    assert "bash scripts/publish.sh" not in workflow
+    assert "|| true" not in workflow
+
+
+def test_release_workflow_stages_only_python_distributions_for_publish() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    staging_start = workflow.index("Stage Python distributions for package index")
+    staging_end = workflow.index("Generate CycloneDX SBOM")
+    staging_block = workflow[staging_start:staging_end]
+
+    assert 'source.glob("*.whl")' in staging_block
+    assert 'source.glob("*.tar.gz")' in staging_block
+    assert "dist-pypi" in staging_block
+    assert "packages-dir: dist-pypi/" in workflow
+    assert "bom.json" not in staging_block
+    assert "SHA256SUMS.txt" not in staging_block
+
+
+def test_release_workflow_retries_post_publish_smoke_check() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    smoke_start = workflow.index("Post-publish smoke check")
+    smoke_end = workflow.index("actions/upload-artifact@", smoke_start)
+    smoke_block = workflow[smoke_start:smoke_end]
+
+    assert "for attempt in {1..10}; do" in smoke_block
+    assert "retrying in 30 s" in smoke_block
+    assert "python -m pip install" in smoke_block
+    assert '--extra-index-url "https://pypi.org/simple/"' in smoke_block
+    assert "Smoke check failed:" in smoke_block
+    assert "|| true" not in smoke_block
+
+
+def test_release_workflow_supports_safe_tag_trigger_defaults() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'tags:\n      - "v*.*.*"' in workflow
+    assert "AUTO_RELEASE_PUBLISH || 'false'" in workflow
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "EFFECTIVE_VERSION: ${{ inputs.version || github.ref_name }}" in workflow
 
 
 def test_release_workflow_installs_actionlint_before_ci_check() -> None:
@@ -437,18 +488,21 @@ def test_release_please_uses_service_token_for_release_prs() -> None:
     assert "permissions:\n  contents: read" in workflow
     assert "contents: write" in workflow
     assert "pull-requests: write" in workflow
-    assert "token: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN || github.token }}" in workflow
+    assert "DOPPLER_GITHUB_SERVICE_TOKEN is required." in workflow
+    assert "token: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN }}" in workflow
+    assert "DOPPLER_GITHUB_SERVICE_TOKEN || github.token" not in workflow
 
 
-def test_docs_workflow_mirrors_canonical_pages_site() -> None:
+def test_docs_workflow_deploys_only_from_org_repo() -> None:
     workflow = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "docs.yml"
     ).read_text(encoding="utf-8")
 
-    assert "Mirror canonical GitHub Pages" in workflow
-    assert "CANONICAL_PAGES_TOKEN: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN }}" in workflow
-    assert "https://oaslananka.github.io/kicad-mcp-pro" in workflow
-    assert "https://github.com/oaslananka/kicad-mcp-pro.git" in workflow
+    assert "github.repository == 'oaslananka-lab/kicad-mcp-pro'" in workflow
+    assert "Mirror canonical GitHub Pages" not in workflow
+    assert "CANONICAL_PAGES_TOKEN" not in workflow
+    assert "github.com/oaslananka/kicad-mcp-pro.git" not in workflow
+    assert "base64" not in workflow
     assert "|| true" not in workflow
 
 
@@ -533,6 +587,7 @@ async def test_export_manufacturing_package_accepts_explicit_variant(
             drill_command="drill",
             position_command="pos",
             supports_ipc2581=True,
+            supports_cli_variant=True,
         ),
     )
 

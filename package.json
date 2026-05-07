@@ -8,6 +8,8 @@
     "version:bump": "uv run python scripts/bump_version.py",
     "metadata:sync": "uv run python scripts/sync_mcp_metadata.py --write",
     "metadata:check": "uv run python scripts/sync_mcp_metadata.py --check",
+    "mcp:manifest:check": "uv run python scripts/validate_mcp_manifest.py",
+    "publish:mcp:dry-run": "uv run python scripts/publish_mcp_registry.py --dry-run",
     "release:check": "uv run python scripts/check_release_preflight.py",
     "lint": "uv run ruff check src/ tests/",
     "format": "uv run ruff format src/ tests/",

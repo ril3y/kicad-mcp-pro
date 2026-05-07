@@ -1,0 +1,102 @@
+name: Jules CI Fixer
+
+on: # zizmor: ignore[dangerous-triggers] guarded workflow_run fixer never checks out failed branch code
+  workflow_run:
+    workflows:
+      - CI
+      - Static Analysis
+      - Lint
+      - Typecheck
+      - Tests
+      - Security
+      - Docker Build
+      - MCP Registry
+      - Package Manager Dry Run
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: jules-ci-fixer-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    name: Ask Jules to fix failed CI
+    if: >-
+      github.repository == 'oaslananka-lab/kicad-mcp-pro' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event != 'workflow_dispatch' &&
+      !startsWith(github.event.workflow_run.head_branch, 'jules/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'dependabot/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'release-please--') &&
+      !contains(fromJSON('["Release","Publish","PyPI Release","Docker Publish","GHCR Publish","MCP Registry Publish","Homebrew Publish","Scoop Publish","Mirror Personal"]'), github.event.workflow_run.name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      HAS_JULES_API_KEY: ${{ secrets.JULES_API_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Validate Jules configuration
+        run: |
+          set -euo pipefail
+          if [ "${HAS_JULES_API_KEY}" != "true" ]; then
+            echo "JULES_API_KEY is not configured; CI fixer is skipped."
+            exit 0
+          fi
+
+      - name: Invoke Jules
+        if: env.HAS_JULES_API_KEY == 'true'
+        uses: google-labs-code/jules-action@bff7875eaa123cac6742b7cfc51005b95ba4d566 # v1.0.0
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ github.event.workflow_run.head_branch }}
+          include_last_commit: true
+          include_commit_log: true
+          prompt: |
+            A same-repository CI workflow failed in the canonical repository oaslananka-lab/kicad-mcp-pro.
+
+            Failed workflow:
+            - Name: ${{ github.event.workflow_run.name }}
+            - URL: ${{ github.event.workflow_run.html_url }}
+            - Branch: ${{ github.event.workflow_run.head_branch }}
+            - Commit: ${{ github.event.workflow_run.head_sha }}
+
+            Your job:
+            1. Inspect the failed run and identify the root cause.
+            2. Implement the smallest correct fix on a jules/ branch.
+            3. Add or update tests only where needed.
+            4. Run the exact validation commands below.
+            5. Open or update a PR with a checklist, exact commands run, and results.
+
+            Hard constraints:
+            - Do not publish anything.
+            - Do not merge anything.
+            - Do not modify secrets or variables.
+            - Do not weaken CI, tests, coverage, lint, type, workflow, or security gates.
+            - Do not run release, PyPI/TestPyPI, Docker/GHCR, npm, Homebrew, Scoop, MCP registry, GitHub Release, SBOM, Sigstore, or attestation publishing.
+            - Do not change release secrets or release/publish workflows unless the failed workflow root cause is there and the fix is minimal.
+            - Do not work on branches starting with jules/, dependabot/, or release-please--.
+
+            Required validation:
+            - corepack npm ci
+            - uv sync --all-extras --frozen
+            - uv run python -m pytest tests/unit/ -q
+            - uv run ruff format --check src/ tests/ scripts/
+            - uv run ruff check src/ tests/ scripts/
+            - uv run python -m mypy src/kicad_mcp/
+            - corepack npm run workflows:lint
+            - uv run python scripts/validate_mcp_manifest.py, if present
+
+            Optional Docker validation when Docker is available:
+            - docker build -t kicad-mcp-pro:local .
+            - docker run --rm kicad-mcp-pro:local --help
+            - docker run --rm kicad-mcp-pro:local health --json

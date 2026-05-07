@@ -1,0 +1,88 @@
+name: Mirror canonical repo to personal showcase
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the mirror plan without pushing"
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+      force_mirror:
+        description: "Use force-with-lease for manual recovery only"
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-personal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror main and tags to personal showcase
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout canonical repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mirror plan
+        env:
+          PERSONAL_REPO_PUSH_TOKEN: ${{ secrets.PERSONAL_REPO_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PERSONAL_REPO_PUSH_TOKEN}" ]; then
+            echo "::error::PERSONAL_REPO_PUSH_TOKEN is required."
+            exit 1
+          fi
+
+          git remote add personal \
+            "https://x-access-token:${PERSONAL_REPO_PUSH_TOKEN}@github.com/oaslananka/kicad-mcp-pro.git"
+          git fetch personal main --tags --prune
+
+          echo "Commits not yet present on personal/main:"
+          git log --oneline personal/main..HEAD || true
+
+          echo "Tags pointing at HEAD:"
+          git tag --points-at HEAD || true
+
+      - name: Push mirror refs
+        if: >-
+          startsWith(github.ref, 'refs/tags/') ||
+          github.ref == 'refs/heads/main' ||
+          (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')
+        env:
+          FORCE_MIRROR: ${{ github.event_name == 'workflow_dispatch' && inputs.force_mirror || 'false' }}
+        run: |
+          set -euo pipefail
+          push_flags=()
+          if [ "${FORCE_MIRROR}" = "true" ]; then
+            if [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
+              echo "::error::force_mirror is allowed only for manual workflow_dispatch runs."
+              exit 1
+            fi
+            push_flags+=(--force-with-lease)
+          fi
+
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] || [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            git push "${push_flags[@]}" personal HEAD:main
+          fi
+
+          git push "${push_flags[@]}" personal --tags

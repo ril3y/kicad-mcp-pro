@@ -26,19 +26,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           python-version: "3.12"
       - run: uv sync --all-extras --frozen
       - name: Pyright
-        continue-on-error: true
-        run: uv run pyright
+        run: uv run python scripts/static_analysis_gate.py pyright --max-errors 604
       - name: Vulture
-        continue-on-error: true
-        run: uv run vulture src tests --min-confidence 90
+        run: >
+          uv run vulture src tests whitelist.py --min-confidence 90
+          --ignore-names stroke_width,stroke_type,page_number,file_path,preserve_format,unit_count,netclass_filter
       - name: Radon complexity
-        continue-on-error: true
-        run: uv run radon cc src -s -n C
+        run: >
+          uv run python scripts/static_analysis_gate.py radon
+          --max-c 48 --max-d 12 --max-e 1 --max-f 2
       - name: Interrogate docstring coverage
-        continue-on-error: true
         run: uvx interrogate==1.7.0 src -c pyproject.toml

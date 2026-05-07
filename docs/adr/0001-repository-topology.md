@@ -8,21 +8,26 @@
 
 The project uses two repos:
 
-- `oaslananka/kicad-mcp-pro` - canonical, public, source of truth for code and releases.
-- `oaslananka-lab/kicad-mcp-pro` - CI/CD execution mirror; automation may run here.
+- `oaslananka-lab/kicad-mcp-pro` - canonical source of truth and release authority.
+- `oaslananka/kicad-mcp-pro` - personal showcase mirror.
 
-This dual-owner model was adopted to separate commit authority from CI execution authority.
+The topology keeps public showcase visibility separate from the repository that
+owns CI/CD, release, registry, package-manager, and signing authority.
 
 ## Decision
 
-Maintain the dual-repo topology. The canonical repo contains all source code. The lab mirror pulls from canonical on a schedule and can run CI, security scanning, release automation, docs deploy, and publishing workflows when those jobs need separated automation authority.
+Maintain the dual-repo topology with the organization repository as canonical.
+The organization repository contains all source changes and runs CI, security
+scanning, release automation, docs deploy, publishing workflows, SBOM generation,
+Sigstore signing, and artifact attestations.
 
-Normal contributors open PRs against canonical. The lab mirror is an automation concern only.
+Normal contributors open PRs against `oaslananka-lab/kicad-mcp-pro`. The
+personal repository receives only one-way mirrors of `main` and version tags.
 
 ## Consequences
 
-- Contributors need to understand which repository owns code review and which repository is executing a given automation job.
-- Public health indicators must make their repository target clear and must not mix canonical and lab-mirror signals without explanation.
+- Contributors need to understand that the organization repository owns code review and automation.
+- Public health indicators must point at the organization repository workflows.
 - The `docs/autonomy.md` document must accurately describe this boundary.
 - Any future maintainer must have access to both repos.
 

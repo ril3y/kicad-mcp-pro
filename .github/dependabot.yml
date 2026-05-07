@@ -33,7 +33,7 @@ updates:
       time: "07:20"
       timezone: Europe/Istanbul
     open-pull-requests-limit: 5
-    versioning-strategy: auto
+    versioning-strategy: lockfile-only
     cooldown:
       default-days: 3
     groups:

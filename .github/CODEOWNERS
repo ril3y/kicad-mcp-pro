@@ -7,7 +7,7 @@
 .actrc                                  @oaslananka
 
 # Release and packaging pipeline
-scripts/release_publish.py              @oaslananka
+scripts/publish.sh                      @oaslananka
 scripts/sync_mcp_metadata.py            @oaslananka
 scripts/bump_version.py                 @oaslananka
 pyproject.toml                          @oaslananka
@@ -21,12 +21,10 @@ docs/release-process.md                 @oaslananka
 docs/workflow-security.md               @oaslananka
 
 # Azure and GitLab CI
-azure-pipelines.yml                     @oaslananka
 .azure/**                               @oaslananka
 .gitlab-ci.yml                          @oaslananka
 
 # Secrets references
-.doppler/**                             @oaslananka
 .env.example                            @oaslananka
 
 # Capability and policy layer (new in this branch)

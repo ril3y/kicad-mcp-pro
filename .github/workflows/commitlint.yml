@@ -18,8 +18,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: "lts/*"
-      - run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+          node-version-file: .node-version
+          cache: npm
+      - run: corepack enable
+      - run: corepack npm ci
       - env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -28,6 +30,4 @@ jobs:
             echo "Commitlint only runs for pull_request events."
             exit 0
           fi
-          npx commitlint --from "${BASE_SHA}" \
-                         --to "${HEAD_SHA}" \
-                         --verbose
+          corepack npm exec -- commitlint --from "${BASE_SHA}" --to "${HEAD_SHA}" --verbose

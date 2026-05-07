@@ -3,8 +3,8 @@
 set -euo pipefail
 
 APPLY="${1:-}"
-REPO_CANONICAL="oaslananka/kicad-mcp-pro"
-REPO_ORG="oaslananka-lab/kicad-mcp-pro"
+REPO_CANONICAL="oaslananka-lab/kicad-mcp-pro"
+REPO_SHOWCASE="oaslananka/kicad-mcp-pro"
 
 say() { printf '\033[1;36m[plan]\033[0m %s\n' "$*"; }
 
@@ -42,7 +42,7 @@ git for-each-ref --format='%(refname:short) %(upstream:track) %(committerdate:un
     done || true
 
 echo
-echo "== Remote branches on canonical older than 90 days without open PRs =="
+echo "== Remote branches on canonical org repo older than 90 days without open PRs =="
 gh api -X GET "/repos/${REPO_CANONICAL}/branches?per_page=100" --jq '.[].name' \
   | grep -Ev '^(main|master|develop|gh-pages)$' \
   | grep -Ev '^(release|hotfix)/' \
@@ -57,15 +57,15 @@ gh api -X GET "/repos/${REPO_CANONICAL}/branches?per_page=100" --jq '.[].name' \
     done || true
 
 echo
-echo "== Remote branches on org mirror older than 90 days =="
-gh api -X GET "/repos/${REPO_ORG}/branches?per_page=100" --jq '.[].name' \
+echo "== Remote branches on personal showcase older than 90 days =="
+gh api -X GET "/repos/${REPO_SHOWCASE}/branches?per_page=100" --jq '.[].name' \
   | grep -Ev '^(main|master|develop|gh-pages)$' \
   | grep -Ev '^(release|hotfix)/' \
   | while read -r br; do
-      sha=$(gh api "/repos/${REPO_ORG}/branches/${br}" --jq '.commit.sha' 2>/dev/null) || continue
-      last=$(gh api "/repos/${REPO_ORG}/commits/${sha}" --jq '.commit.committer.date' 2>/dev/null) || continue
+      sha=$(gh api "/repos/${REPO_SHOWCASE}/branches/${br}" --jq '.commit.sha' 2>/dev/null) || continue
+      last=$(gh api "/repos/${REPO_SHOWCASE}/commits/${sha}" --jq '.commit.committer.date' 2>/dev/null) || continue
       if [[ "$last" < "$(cutoff_iso 90)" ]]; then
-        run_or_print gh api -X DELETE "/repos/${REPO_ORG}/git/refs/heads/${br}"
+        run_or_print gh api -X DELETE "/repos/${REPO_SHOWCASE}/git/refs/heads/${br}"
       fi
     done || true
 
@@ -90,8 +90,8 @@ gh release list --repo "$REPO_CANONICAL" --limit 200 --json tagName --jq '.[].ta
 comm -23 /tmp/canonical_tags.txt /tmp/canonical_releases.txt | sed 's/^/  /' || true
 
 echo
-echo "Tag mismatch where org has tags canonical lacks:"
-git ls-remote --tags "https://github.com/${REPO_ORG}.git" \
+echo "Tag mismatch where showcase has tags canonical lacks:"
+git ls-remote --tags "https://github.com/${REPO_SHOWCASE}.git" \
   | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '\^{}' | sort -u > /tmp/org_tags.txt
 comm -23 /tmp/org_tags.txt /tmp/canonical_tags.txt | sed 's/^/  /' || true
 

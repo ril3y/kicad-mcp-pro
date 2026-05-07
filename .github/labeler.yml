@@ -35,7 +35,7 @@ area:ci:
   - changed-files:
       - any-glob-to-any-file:
           - .github/**/*
-          - azure-pipelines.yml
+          - .azure/**/*
           - .gitlab-ci.yml
           - package.json
           - package-lock.json

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Local-only fallback for maintainers who need to publish outside GitHub
+# Actions. The canonical release workflow uses PyPI Trusted Publishing via
+# OIDC and must not call this script.
+
 : "${RELEASE_INDEX:=TestPyPI}"
 
 python -m pip install --upgrade twine

@@ -4,10 +4,12 @@ This repository is configured for a dual-owner model.
 
 ## Ownership
 
-- `oaslananka/kicad-mcp-pro` is the public canonical repository.
-- `oaslananka-lab/kicad-mcp-pro` is the automation mirror.
+- `oaslananka-lab/kicad-mcp-pro` is the canonical source-of-truth and release authority.
+- `oaslananka/kicad-mcp-pro` is a personal showcase mirror.
 
-Commits, branches, and tags move from canonical to the lab mirror. Release artifacts move back from the lab mirror to canonical after release publication.
+Only the organization repository accepts source changes for release. The personal
+repository receives one-way mirrors of `main` and `v*.*.*` tags for public
+visibility.
 
 ## CI/CD Authority
 
@@ -21,12 +23,18 @@ Automation runs only on `oaslananka-lab/kicad-mcp-pro`:
 - documentation deploy
 - image and Docker checks
 
-The canonical repository should not run GitHub Actions. The lab mirror pulls from canonical on a schedule and runs all automation there.
+The personal showcase repository should not run required GitHub Actions. If the
+mirrored workflow files appear there, repository guards skip CI/CD, release,
+publishing, registry, package-manager, signing, and deployment jobs.
 
 ## Secrets
 
-Doppler project `all`, config `main` is the secret source of truth. Workflows use `DOPPLER_TOKEN` to fetch runtime secrets through `doppler run`.
+Doppler project `all`, config `main` is the secret source of truth for
+organization workflows that need Doppler-backed values. Mirror writes use
+`PERSONAL_REPO_PUSH_TOKEN`, scoped only to the personal showcase repository.
 
 ## Automation Boundaries
 
-Automation does not publish releases or push tags without an explicit manual release workflow invocation and release environment approval.
+Automation does not publish releases without an explicit manual input, a
+release tag trigger configured in the organization repository, and the protected
+`release` environment approval where required.

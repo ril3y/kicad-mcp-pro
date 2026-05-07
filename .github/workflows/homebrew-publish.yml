@@ -1,0 +1,179 @@
+name: Homebrew Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version without leading v"
+        required: true
+        type: string
+      publish:
+        description: "Create a PR in oaslananka-lab/homebrew-tap"
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+env:
+  TAP_REPO: oaslananka-lab/homebrew-tap
+  FORMULA_NAME: kicad-mcp-pro.rb
+
+jobs:
+  generate:
+    name: Generate formula
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Generate Homebrew formula
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p Formula
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["VERSION"].removeprefix("v")
+          with urllib.request.urlopen(f"https://pypi.org/pypi/kicad-mcp-pro/{version}/json", timeout=30) as response:
+              payload = json.load(response)
+
+          sdist = next((url for url in payload["urls"] if url["packagetype"] == "sdist"), None)
+          if sdist is None:
+              raise SystemExit(f"No PyPI sdist found for kicad-mcp-pro {version}")
+
+          formula = f'''class KicadMcpPro < Formula
+            include Language::Python::Virtualenv
+
+            desc "Model Context Protocol server for KiCad EDA workflows"
+            homepage "https://github.com/oaslananka/kicad-mcp-pro"
+            url "{sdist["url"]}"
+            sha256 "{sdist["digests"]["sha256"]}"
+            license "MIT"
+
+            depends_on "python@3.12"
+
+            def install
+              virtualenv_install_with_resources
+            end
+
+            test do
+              assert_match "{version}", shell_output("#{{bin}}/kicad-mcp-pro version")
+            end
+          end
+          '''
+          Path("Formula/kicad-mcp-pro.rb").write_text(formula, encoding="utf-8")
+          PY
+          brew update-python-resources --package-name kicad-mcp-pro Formula/kicad-mcp-pro.rb
+
+      - name: Print generated formula
+        run: |
+          set -euo pipefail
+          git diff --no-index -- /dev/null Formula/kicad-mcp-pro.rb || true
+
+  publish:
+    name: Create tap PR
+    if: >-
+      github.repository == 'oaslananka-lab/kicad-mcp-pro' &&
+      inputs.publish == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    needs:
+      - generate
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate tap access
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_MANAGER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::PACKAGE_MANAGER_TOKEN is required to create a Homebrew tap PR."
+            exit 1
+          fi
+          gh repo view "${TAP_REPO}" >/dev/null
+
+      - name: Generate Homebrew formula
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p Formula
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["VERSION"].removeprefix("v")
+          with urllib.request.urlopen(f"https://pypi.org/pypi/kicad-mcp-pro/{version}/json", timeout=30) as response:
+              payload = json.load(response)
+          sdist = next((url for url in payload["urls"] if url["packagetype"] == "sdist"), None)
+          if sdist is None:
+              raise SystemExit(f"No PyPI sdist found for kicad-mcp-pro {version}")
+          formula = f'''class KicadMcpPro < Formula
+            include Language::Python::Virtualenv
+
+            desc "Model Context Protocol server for KiCad EDA workflows"
+            homepage "https://github.com/oaslananka/kicad-mcp-pro"
+            url "{sdist["url"]}"
+            sha256 "{sdist["digests"]["sha256"]}"
+            license "MIT"
+
+            depends_on "python@3.12"
+
+            def install
+              virtualenv_install_with_resources
+            end
+
+            test do
+              assert_match "{version}", shell_output("#{{bin}}/kicad-mcp-pro version")
+            end
+          end
+          '''
+          Path("Formula/kicad-mcp-pro.rb").write_text(formula, encoding="utf-8")
+          PY
+          brew update-python-resources --package-name kicad-mcp-pro Formula/kicad-mcp-pro.rb
+
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_MANAGER_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          branch="kicad-mcp-pro-${VERSION#v}"
+          gh repo clone "${TAP_REPO}" tap
+          cd tap
+          git checkout -b "${branch}"
+          mkdir -p Formula
+          cp ../Formula/kicad-mcp-pro.rb "Formula/${FORMULA_NAME}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Formula/${FORMULA_NAME}"
+          git commit -m "kicad-mcp-pro ${VERSION#v}"
+          git push --set-upstream origin "${branch}"
+          gh pr create \
+            --repo "${TAP_REPO}" \
+            --head "${branch}" \
+            --base main \
+            --title "kicad-mcp-pro ${VERSION#v}" \
+            --body "Updates the Homebrew formula for kicad-mcp-pro ${VERSION#v}."

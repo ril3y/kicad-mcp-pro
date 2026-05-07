@@ -7,7 +7,7 @@ or be wrapped to return a :class:`ToolResult`.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,12 +58,14 @@ class ToolResult(BaseModel):
     @classmethod
     def success(cls, tool_name: str, *, changed: bool = True, **kwargs: object) -> ToolResult:
         """Create a successful result."""
-        return cls(ok=True, changed=changed, tool_name=tool_name, **kwargs)
+        return cls(ok=True, changed=changed, tool_name=tool_name, **cast(Any, kwargs))
 
     @classmethod
     def failure(cls, tool_name: str, error: str, **kwargs: object) -> ToolResult:
         """Create a failed result."""
-        return cls(ok=False, changed=False, tool_name=tool_name, errors=[error], **kwargs)
+        return cls(
+            ok=False, changed=False, tool_name=tool_name, errors=[error], **cast(Any, kwargs)
+        )
 
     @classmethod
     def dry_run_result(cls, tool_name: str, summary: str, **kwargs: object) -> ToolResult:
@@ -74,7 +76,7 @@ class ToolResult(BaseModel):
             dry_run=True,
             tool_name=tool_name,
             state_delta=StateDelta(summary=f"[DRY-RUN] {summary}"),
-            **kwargs,
+            **cast(Any, kwargs),
         )
 
     def add_warning(self, msg: str) -> None:

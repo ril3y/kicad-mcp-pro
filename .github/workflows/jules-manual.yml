@@ -1,0 +1,109 @@
+name: Jules Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch Jules should start from"
+        default: main
+        required: true
+        type: string
+      task_type:
+        description: "Task class"
+        required: true
+        type: choice
+        options:
+          - ci-fix
+          - dependency-fix
+          - docs-fix
+          - tests
+          - security-hardening
+          - mcp-integration
+          - packaging
+          - release-dry-run-fix
+      prompt:
+        description: "Specific Jules task"
+        required: true
+        type: string
+      include_last_commit:
+        description: "Include last commit diff"
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      include_commit_log:
+        description: "Include recent commit log"
+        default: "true"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jules-manual-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    name: Invoke Jules manually
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      HAS_JULES_API_KEY: ${{ secrets.JULES_API_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Validate Jules configuration
+        run: |
+          set -euo pipefail
+          if [ "${HAS_JULES_API_KEY}" != "true" ]; then
+            echo "::error::JULES_API_KEY is required for manual Jules runs."
+            exit 1
+          fi
+
+      - name: Invoke Jules
+        uses: google-labs-code/jules-action@bff7875eaa123cac6742b7cfc51005b95ba4d566 # v1.0.0
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ inputs.branch }}
+          include_last_commit: ${{ inputs.include_last_commit }}
+          include_commit_log: ${{ inputs.include_commit_log }}
+          prompt: |
+            You are working in the canonical repository oaslananka-lab/kicad-mcp-pro.
+            The personal repository oaslananka/kicad-mcp-pro is a showcase mirror only.
+
+            Task type: ${{ inputs.task_type }}
+            User task:
+            ${{ inputs.prompt }}
+
+            Hard constraints:
+            - Do not publish anything.
+            - Do not merge anything.
+            - Do not modify secrets or variables.
+            - Do not weaken CI, tests, coverage, lint, type, workflow, or security gates.
+            - Do not alter release or publish workflows unless this task explicitly requires a minimal fix.
+            - Do not trigger release, PyPI/TestPyPI, GHCR, npm, Homebrew, Scoop, MCP registry, SBOM, Sigstore, or attestation publishing.
+            - Keep changes minimal and focused.
+            - Run local project validation before opening or updating a PR.
+            - Open or update a PR only if validation passes.
+            - Include exact commands run and results in the PR body.
+
+            Required validation:
+            - corepack npm ci
+            - uv sync --all-extras --frozen
+            - uv run python -m pytest tests/unit/ -q
+            - uv run ruff format --check src/ tests/ scripts/
+            - uv run ruff check src/ tests/ scripts/
+            - uv run python -m mypy src/kicad_mcp/
+            - corepack npm run workflows:lint
+            - uv run python scripts/validate_mcp_manifest.py, if present
+
+            Optional Docker validation when Docker is available:
+            - docker build -t kicad-mcp-pro:local .
+            - docker run --rm kicad-mcp-pro:local --help
+            - docker run --rm kicad-mcp-pro:local health --json

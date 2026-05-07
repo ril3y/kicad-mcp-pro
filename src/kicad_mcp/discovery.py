@@ -54,6 +54,7 @@ class CliCapabilities:
     supports_allegro_import: bool = False
     supports_pads_import: bool = False
     supports_geda_import: bool = False
+    supports_cli_variant: bool = False
 
 
 def _candidate_cli_paths() -> list[Path]:
@@ -195,6 +196,7 @@ def get_cli_capabilities(cli_path: Path) -> CliCapabilities:
         supports_allegro_import="allegro" in blob,
         supports_pads_import="pads" in blob,
         supports_geda_import="geda" in blob,
+        supports_cli_variant="--variant" in blob,
     )
     _CLI_CAPABILITIES_CACHE[cache_key] = capabilities
     return capabilities

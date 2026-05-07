@@ -18,6 +18,7 @@ from ..config import get_config
 from ..connection import board_transaction, get_board
 from ..models.common import _PadLike
 from ..models.pcb import AddTrackInput
+from ..models.tool_result import ArtifactRef, StateDelta, ToolResult
 from ..utils.freerouting import FreeRoutingRunner
 from ..utils.layers import resolve_layer
 from ..utils.sexpr import _sexpr_string
@@ -40,11 +41,17 @@ _TUNING_ASSIGNMENTS_FILENAME = "tuning_profile_assignments.json"
 
 
 def _find_pad(reference: str, pad_number: str) -> _PadLike | None:
-    for pad in cast(list[_PadLike], get_board().get_pads()):
-        if pad.parent.reference_field.text.value == reference and str(pad.number) == str(
-            pad_number
-        ):
-            return pad
+    # kipy's ``Pad`` class has no ``parent`` back-reference (verified against
+    # ``kipy.board_types.Pad``). Iterate footprints first and walk their pad
+    # set via ``FootprintInstance.definition.pads``.
+    board = get_board()
+    for fp in board.get_footprints():
+        if fp.reference_field.text.value != reference:
+            continue
+        for pad in fp.definition.pads:
+            if str(pad.number) == str(pad_number):
+                return cast(_PadLike, pad)
+        return None
     return None
 
 
@@ -355,22 +362,32 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def route_export_dsn(output_path: str = "output/routing/board.dsn") -> str:
+    def route_export_dsn(output_path: str = "output/routing/board.dsn") -> ToolResult:
         """Stage a Specctra DSN file for FreeRouting."""
         runner = FreeRoutingRunner()
         pcb_file = _get_pcb_file()
         try:
             dsn_path = runner.export_dsn(pcb_file, Path(output_path))
         except (RuntimeError, ValueError) as exc:
-            return f"Specctra DSN export is unavailable: {exc}"
-        return (
-            f"Specctra DSN ready at {dsn_path}. "
-            "You can route it with route_autoroute_freerouting()."
+            return ToolResult.failure(
+                "route_export_dsn", f"Specctra DSN export is unavailable: {exc}"
+            )
+        return ToolResult.success(
+            "route_export_dsn",
+            changed=True,
+            artifacts=[ArtifactRef(path=str(dsn_path), kind="dsn")],
+            state_delta=StateDelta(
+                summary=(
+                    f"Specctra DSN ready at {_relative_project_path(dsn_path)}. "
+                    "You can route it with route_autoroute_freerouting()."
+                ),
+                changed_files=[str(dsn_path)],
+            ),
         )
 
     @mcp.tool()
     @headless_compatible
-    def route_import_ses(ses_path: str = "output/routing/board.ses") -> str:
+    def route_import_ses(ses_path: str = "output/routing/board.ses") -> ToolResult:
         """Stage a Specctra SES file and explain the KiCad import step."""
         runner = FreeRoutingRunner()
         pcb_file = _get_pcb_file()
@@ -378,10 +395,20 @@ def register(mcp: FastMCP) -> None:
             resolved_ses = get_config().resolve_within_project(Path(ses_path))
             staged = runner.import_ses(pcb_file, resolved_ses)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            return f"Specctra SES import is unavailable: {exc}"
-        return (
-            f"Specctra SES session staged at {staged}. "
-            "KiCad 10 still requires importing the session from the PCB Editor UI."
+            return ToolResult.failure(
+                "route_import_ses", f"Specctra SES import is unavailable: {exc}"
+            )
+        return ToolResult.success(
+            "route_import_ses",
+            changed=True,
+            artifacts=[ArtifactRef(path=str(staged), kind="ses")],
+            state_delta=StateDelta(
+                summary=(
+                    f"Specctra SES session staged at {_relative_project_path(staged)}. "
+                    "KiCad 10 still requires importing the session from the PCB Editor UI."
+                ),
+                changed_files=[str(staged)],
+            ),
         )
 
     @mcp.tool()
@@ -398,7 +425,7 @@ def register(mcp: FastMCP) -> None:
         freerouting_jar_path: str | None = None,
         drc_report_path: str = "output/routing/freerouting.drc.json",
         ctx: Context[Any, Any, Any] | None = None,
-    ) -> str:
+    ) -> ToolResult:
         """Run FreeRouting after placement; do not skip this post-placement routing step."""
         cfg = get_config()
         runner = FreeRoutingRunner()
@@ -425,14 +452,19 @@ def register(mcp: FastMCP) -> None:
                 drc_report_path=drc_target,
             )
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            return f"FreeRouting autoroute failed: {exc}"
+            return ToolResult.failure(
+                "route_autoroute_freerouting", f"FreeRouting autoroute failed: {exc}"
+            )
 
         if result.returncode != 0:
-            return (
-                "FreeRouting autoroute failed.\n"
-                f"Mode: {result.mode}\n"
-                f"Command: {' '.join(result.command)}\n"
-                f"stderr: {result.stderr or 'unknown error'}"
+            return ToolResult.failure(
+                "route_autoroute_freerouting",
+                (
+                    "FreeRouting autoroute failed.\n"
+                    f"Mode: {result.mode}\n"
+                    f"Command: {' '.join(result.command)}\n"
+                    f"stderr: {result.stderr or 'unknown error'}"
+                ),
             )
 
         # Validate the SES output actually exists and is not empty before
@@ -442,38 +474,58 @@ def register(mcp: FastMCP) -> None:
         ses_output = result.output_ses
         ses_path_obj = Path(ses_output) if ses_output else None
         if ses_path_obj is None:
-            return "FreeRouting autoroute failed: no SES output path was reported."
+            return ToolResult.failure(
+                "route_autoroute_freerouting",
+                "FreeRouting autoroute failed: no SES output path was reported.",
+            )
         ses_ok = ses_path_obj.exists() and ses_path_obj.stat().st_size > 0
         if not ses_ok:
-            return (
-                "FreeRouting ran but the SES session file is missing or empty — "
-                "this is a known KiCad 10 / Specctra round-trip failure.\n"
-                "Workaround: open the PCB in KiCad GUI and import the DSN manually "
-                f"via File > Import > Specctra Session ({_relative_project_path(dsn_file)}).\n"
-                f"SES path checked: {ses_path_obj}"
+            return ToolResult.failure(
+                "route_autoroute_freerouting",
+                (
+                    "FreeRouting ran but the SES session file is missing or empty — "
+                    "this is a known KiCad 10 / Specctra round-trip failure.\n"
+                    "Workaround: open the PCB in KiCad GUI and import the DSN manually "
+                    f"via File > Import > Specctra Session ({_relative_project_path(dsn_file)}).\n"
+                    f"SES path checked: {ses_path_obj}"
+                ),
             )
 
         try:
             await _report_progress(ctx, 85, 100, "Staging SES session for KiCad import...")
             staged = runner.import_ses(pcb_file, ses_path_obj)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            return f"FreeRouting autoroute failed while staging the SES file: {exc}"
+            return ToolResult.failure(
+                "route_autoroute_freerouting",
+                f"FreeRouting autoroute failed while staging the SES file: {exc}",
+            )
 
         ignore_text = ", ".join([*(net_classes_to_ignore or []), *(exclude_nets or [])]) or "none"
         await _report_progress(ctx, 100, 100, "FreeRouting autoroute complete.")
-        return (
-            "FreeRouting completed successfully.\n"
-            f"Mode: {result.mode}\n"
-            f"DSN: {_relative_project_path(dsn_file)}\n"
-            f"SES: {_relative_project_path(staged)}\n"
-            f"Routed: {result.routed_pct:.2f}% ({result.total_nets} net(s), "
-            f"{len(result.unrouted_nets)} unrouted)\n"
-            f"Pass count: {result.pass_count}\n"
-            f"Wall time: {result.wall_seconds:.3f}s\n"
-            f"Ignored net classes: {ignore_text}\n"
-            f"Thread count: {thread_count}\n"
-            f"SES path: {_relative_project_path(result.ses_path)}\n"
-            f"stdout tail: {result.stdout_tail or '(empty)'}"
+        return ToolResult.success(
+            "route_autoroute_freerouting",
+            changed=True,
+            artifacts=[
+                ArtifactRef(path=str(dsn_file), kind="dsn"),
+                ArtifactRef(path=str(staged), kind="ses"),
+            ],
+            state_delta=StateDelta(
+                summary=(
+                    "FreeRouting completed successfully.\n"
+                    f"Mode: {result.mode}\n"
+                    f"DSN: {_relative_project_path(dsn_file)}\n"
+                    f"SES: {_relative_project_path(staged)}\n"
+                    f"Routed: {result.routed_pct:.2f}% ({result.total_nets} net(s), "
+                    f"{len(result.unrouted_nets)} unrouted)\n"
+                    f"Pass count: {result.pass_count}\n"
+                    f"Wall time: {result.wall_seconds:.3f}s\n"
+                    f"Ignored net classes: {ignore_text}\n"
+                    f"Thread count: {thread_count}\n"
+                    f"SES path: {_relative_project_path(result.ses_path)}\n"
+                    f"stdout tail: {result.stdout_tail or '(empty)'}"
+                ),
+                changed_files=[str(dsn_file), str(staged)],
+            ),
         )
 
     @mcp.tool()

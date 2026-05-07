@@ -104,6 +104,71 @@ def test_variant_apply_to_kicad_cli_args_returns_empty_when_project_has_no_activ
     assert variant_apply_to_kicad_cli_args() == []
 
 
+class _FakeConfig:
+    kicad_cli = None
+
+
+def _patch_variant_args_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    variant_args: list[str],
+    *,
+    supports_cli_variant: bool,
+) -> None:
+    from kicad_mcp.discovery import CliCapabilities
+
+    monkeypatch.setattr(
+        "kicad_mcp.tools.export.variant_apply_to_kicad_cli_args",
+        lambda variant_name=None: list(variant_args),
+    )
+    monkeypatch.setattr("kicad_mcp.tools.export.get_config", lambda: _FakeConfig())
+    monkeypatch.setattr(
+        "kicad_mcp.tools.export.get_cli_capabilities",
+        lambda _cli: CliCapabilities(
+            version="KiCad 9.0.7", supports_cli_variant=supports_cli_variant
+        ),
+    )
+
+
+def test_active_variant_args_raises_when_cli_lacks_variant_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit non-default variants must fail loudly on pre-KiCad-10 CLIs.
+
+    Silently dropping the flag would cause a requested variant (e.g. ``lite``)
+    to manufacture as the default board, which is a correctness footgun.
+    """
+    from kicad_mcp.tools.export import _active_variant_args
+
+    _patch_variant_args_dependencies(monkeypatch, ["--variant", "lite"], supports_cli_variant=False)
+
+    with pytest.raises(ValueError, match="does not support --variant"):
+        _active_variant_args()
+
+
+def test_active_variant_args_suppresses_synthetic_default_on_old_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The synthetic ``default`` variant adds no overrides, so dropping it is safe."""
+    from kicad_mcp.tools.export import _active_variant_args
+
+    _patch_variant_args_dependencies(
+        monkeypatch, ["--variant", "default"], supports_cli_variant=False
+    )
+
+    assert _active_variant_args() == []
+
+
+def test_active_variant_args_forwards_variant_on_new_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KiCad-10 CLIs accept ``--variant``, so the flag must pass through."""
+    from kicad_mcp.tools.export import _active_variant_args
+
+    _patch_variant_args_dependencies(monkeypatch, ["--variant", "lite"], supports_cli_variant=True)
+
+    assert _active_variant_args() == ["--variant", "lite"]
+
+
 def test_render_variant_components_merges_unknown_override_reference(
     sample_project,
     monkeypatch: pytest.MonkeyPatch,

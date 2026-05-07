@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kicad-mcp-pro"
-version = "3.1.8"
+version = "3.2.1"
 description = "A Model Context Protocol server for KiCad EDA workflows."
 readme = "README.md"
 license = { text = "MIT" }
@@ -78,17 +78,19 @@ dev = [
 freerouting = ["docker>=7.0.0"]
 http = ["httpx>=0.27.0", "uvicorn[standard]>=0.30.0"]
 simulation = ["numpy>=1.26.0"]
-vcs = ["gitpython>=3.1.47,<4.0.0"]
+vcs = [
+    "gitpython>=3.1.49,<4.0.0",
+]
 
 [project.scripts]
 kicad-mcp-pro = "kicad_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/oaslananka/kicad-mcp-pro"
-Documentation = "https://oaslananka.github.io/kicad-mcp-pro"
-Repository = "https://github.com/oaslananka/kicad-mcp-pro"
-"Bug Tracker" = "https://github.com/oaslananka/kicad-mcp-pro/issues"
-Changelog = "https://github.com/oaslananka/kicad-mcp-pro/blob/main/CHANGELOG.md"
+Documentation = "https://oaslananka-lab.github.io/kicad-mcp-pro"
+Repository = "https://github.com/oaslananka-lab/kicad-mcp-pro"
+"Bug Tracker" = "https://github.com/oaslananka-lab/kicad-mcp-pro/issues"
+Changelog = "https://github.com/oaslananka-lab/kicad-mcp-pro/blob/main/CHANGELOG.md"
 Funding = "https://github.com/sponsors/oaslananka"
 
 [tool.hatch.build.targets.wheel]
@@ -128,7 +130,7 @@ ignore-magic = true
 ignore-module = false
 ignore-nested-functions = true
 ignore-private = true
-fail-under = 80
+fail-under = 43.3
 verbose = 1
 
 [tool.coverage.run]

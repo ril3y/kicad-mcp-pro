@@ -2,25 +2,28 @@
 
 ## Repositories
 
-- Canonical: `oaslananka/kicad-mcp-pro`
-- CI/CD mirror: `oaslananka-lab/kicad-mcp-pro`
+- Canonical source-of-truth: `oaslananka-lab/kicad-mcp-pro`
+- Personal showcase mirror: `oaslananka/kicad-mcp-pro`
 
-The canonical repository is the public source of truth. The lab repository can
-still run protected release and mirror automation, but normal CI and security
-checks are expected to run on pull requests, pushes, and merge queue events.
+The organization repository is the only source repository for CI/CD, release,
+publishing, registry updates, package-manager updates, signing, SBOM generation,
+and artifact attestations. The personal repository is a showcase mirror only.
+If repository state differs, the organization repository wins.
 
-## Synchronization
+## Showcase Mirror
 
-The lab repository pulls from canonical every 15 minutes with `.github/workflows/sync-from-canonical.yml`.
+The organization repository mirrors only `main` and version tags to the personal
+showcase repository with `.github/workflows/mirror-personal.yml`.
 
 Direction:
 
-- Branches and tags: canonical to lab
-- GitHub Releases and release assets: lab to canonical
+- `oaslananka-lab/kicad-mcp-pro` `main` branch to `oaslananka/kicad-mcp-pro` `main`
+- `v*.*.*` tags from organization to personal showcase
 
-Normal CI, lint, test, docs, CodeQL, Gitleaks, Trivy, and workflow-security jobs
-must not be skipped by stale repository guards. Release, publish, mirroring,
-deployment, and issue/label mutation jobs remain explicitly guarded.
+The mirror does not sync pull request branches, release-please branches,
+workflow run state, issues, or GitHub Releases. The mirror workflow uses
+`PERSONAL_REPO_PUSH_TOKEN`, which must be scoped only to the personal showcase
+repository. It does not use the default `GITHUB_TOKEN` for cross-repo writes.
 
 ## Actions Policy
 
@@ -28,30 +31,60 @@ Keep Actions enabled anywhere branch protection depends on them. Use least
 privilege workflow permissions and protected environments rather than disabling
 normal validation.
 
-## Manual Sync
+## Jules Automation
 
-Use this only if the scheduled lab pull is unavailable:
+Jules may create or update fix branches and PRs in the organization repository
+only. It must not publish releases, packages, registry entries, SBOMs, Sigstore
+bundles, or attestations, and it must not merge PRs.
+
+See [Jules Automation](automation/jules.md) for the workflow inventory,
+security guards, required `JULES_API_KEY` secret, and disable commands.
+
+## Manual Mirror
+
+Review the mirror plan without writing to the personal repository:
 
 ```bash
-bash scripts/sync-remotes.sh main
+gh workflow run mirror-personal.yml --repo oaslananka-lab/kicad-mcp-pro \
+  -f dry_run=true
 ```
 
-```powershell
-.\scripts\sync-remotes.ps1 -Branch main
+Mirror after reviewing the plan:
+
+```bash
+gh workflow run mirror-personal.yml --repo oaslananka-lab/kicad-mcp-pro \
+  -f dry_run=false
 ```
 
-Both scripts require a clean working tree.
+The workflow refuses force updates unless `force_mirror=true` is provided in a
+manual dispatch.
 
 ## Mirror Recovery
 
-1. Confirm `DOPPLER_GITHUB_SERVICE_TOKEN` exists in Doppler and is synced to the lab repository.
-2. Run `.github/workflows/sync-from-canonical.yml` manually in `oaslananka-lab/kicad-mcp-pro`.
-3. If the workflow is unavailable, run the manual sync helper from a clean local clone.
-4. Re-run lab CI on the mirrored branch.
+1. Confirm `PERSONAL_REPO_PUSH_TOKEN` exists in the organization repository and
+   has access only to `oaslananka/kicad-mcp-pro`.
+2. Run `.github/workflows/mirror-personal.yml` manually with `dry_run=true`.
+3. Review `git log --oneline personal/main..HEAD` in the job log.
+4. Re-run with `dry_run=false` after CI is green on the organization repository.
 
-## Release Artifact Back-Mirror
+## Pending: OIDC Trusted Publishing
 
-The `Mirror releases back to canonical` workflow republishes lab GitHub Releases to canonical. It uses `DOPPLER_GITHUB_SERVICE_TOKEN`.
+The current release pipeline publishes with `pypa/gh-action-pypi-publish` and
+GitHub Actions OIDC. Long-lived PyPI tokens (`PYPI_TOKEN`, `TEST_PYPI_TOKEN`)
+are not required by `.github/workflows/release.yml`.
+
+Migration path:
+1. Configure a trusted publisher in the PyPI project settings pointing to
+   `oaslananka-lab/kicad-mcp-pro`, workflow `release.yml`, environment `release`.
+2. Configure the matching trusted publisher in TestPyPI with the same owner,
+   repository, workflow, and environment.
+3. Keep `id-token: write` on the release workflow so PyPI can mint short-lived
+   publish credentials during the protected `release` environment run.
+4. Remove any remaining `PYPI_TOKEN` and `TEST_PYPI_TOKEN` secrets from the org
+   repo after TestPyPI and PyPI trusted publishers are confirmed.
+
+Blocked by: requires PyPI and TestPyPI account owner action to configure the
+trusted publishers.
 
 ## Branch Cleanup
 
@@ -71,8 +104,8 @@ The monthly `Branch hygiene report` workflow is report-only. It opens or updates
 
 ## Auto-Delete Merged PR Branches
 
-Recommended one-time setting on canonical:
+Recommended one-time setting on the organization repository:
 
 ```bash
-gh api -X PATCH /repos/oaslananka/kicad-mcp-pro -f delete_branch_on_merge=true
+gh api -X PATCH /repos/oaslananka-lab/kicad-mcp-pro -f delete_branch_on_merge=true
 ```

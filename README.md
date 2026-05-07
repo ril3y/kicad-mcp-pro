@@ -1,17 +1,25 @@
 # KiCad MCP Pro Server
-<!-- mcp-name: io.github.oaslananka/kicad-mcp-pro -->
+
+<!-- mcp-name: io.github.oaslananka-lab/kicad-mcp-pro -->
 
 [![PyPI](https://img.shields.io/pypi/v/kicad-mcp-pro.svg)](https://pypi.org/project/kicad-mcp-pro/)
 [![CI](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/ci.yml)
-[![Codecov](https://codecov.io/gh/oaslananka/kicad-mcp-pro/branch/main/graph/badge.svg)](https://codecov.io/gh/oaslananka/kicad-mcp-pro)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/oaslananka/kicad-mcp-pro/badge)](https://scorecard.dev/viewer/?uri=github.com/oaslananka/kicad-mcp-pro)
+[![Docs](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/docs.yml/badge.svg)](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/docs.yml)
+[![Release](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/release.yml/badge.svg)](https://github.com/oaslananka-lab/kicad-mcp-pro/actions/workflows/release.yml)
+[![Codecov](https://codecov.io/gh/oaslananka-lab/kicad-mcp-pro/branch/main/graph/badge.svg)](https://codecov.io/gh/oaslananka-lab/kicad-mcp-pro)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/oaslananka-lab/kicad-mcp-pro/badge)](https://scorecard.dev/viewer/?uri=github.com/oaslananka-lab/kicad-mcp-pro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![KiCad 10](https://img.shields.io/badge/KiCad-10-success.svg)](https://www.kicad.org)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-oaslananka-yellow?logo=buy-me-a-coffee)](https://buymeacoffee.com/oaslananka)
 
 KiCad MCP Pro is a Model Context Protocol server for KiCad PCB and schematic workflows. It gives agents project setup, schematic editing, PCB inspection and edits, validation gates, DFM checks, SI/PI helpers, simulation helpers, and release-gated manufacturing export.
 
 Use it with Claude Desktop, Claude Code, Cursor, VS Code, Codex, or any MCP-compatible client.
+
+Canonical repository: https://github.com/oaslananka-lab/kicad-mcp-pro
+
+Personal showcase mirror: https://github.com/oaslananka/kicad-mcp-pro
 
 ## Quick Start
 
@@ -108,6 +116,10 @@ Demo media guidance lives in [docs/demo-media.md](docs/demo-media.md).
 - [Release process](docs/release-process.md)
 - [Maintenance policy](docs/maintenance-policy.md)
 - [Workflow security](docs/workflow-security.md)
+- [Publishing](docs/publishing.md)
+- [Release integrity](docs/security/release-integrity.md)
+- [Docker install](docs/install/docker.md)
+- [Client config generator](docs/install/client-config-generator.md)
 - [Security threat model](docs/security/threat-model.md)
 - [Architecture decisions](docs/adr/README.md)
 - [Comparison](docs/comparison.md)
@@ -125,9 +137,16 @@ GitHub artifact attestations for release hardening.
 Operational references:
 
 - [Repository operations](docs/repository-operations.md)
+- [Publishing](docs/publishing.md)
+- [Jules automation](docs/automation/jules.md)
 - [Autonomy model](docs/autonomy.md)
 - [Doppler setup](docs/doppler-setup.md)
 - [Branch protection](docs/branch-protection.md)
+
+Jules-based fixer automation is restricted to the canonical organization
+repository. Jules may open or update fix PRs, but it must not publish packages,
+registries, releases, SBOMs, signatures, or attestations, and it must not merge
+without human review.
 
 ## Contributing and Support
 

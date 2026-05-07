@@ -1,23 +1,34 @@
-FROM python:3.12-slim AS base
-WORKDIR /app
+FROM python:3.12-slim AS builder
 
-FROM base AS builder
-RUN pip install --no-cache-dir uv
+ARG UV_VERSION=0.9.30
+ENV UV_NO_CACHE=1
+WORKDIR /build
+
+RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ src/
-RUN uv sync --frozen --extra http
+RUN uv build --wheel --out-dir /dist \
+  && uv export --frozen --no-dev --no-emit-project \
+    --no-hashes \
+    --format requirements.txt \
+    --output-file /dist/requirements.txt
 
-FROM base AS runtime
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONUNBUFFERED=1
+WORKDIR /app
+
 RUN groupadd --system kicadmcp \
-    && useradd --system --gid kicadmcp --home-dir /app --shell /usr/sbin/nologin kicadmcp
-COPY --from=builder --chown=kicadmcp:kicadmcp /app/.venv .venv
-COPY --chown=kicadmcp:kicadmcp src/ src/
-COPY --chown=kicadmcp:kicadmcp README.md LICENSE ./
-LABEL org.opencontainers.image.description="KiCad MCP Pro - kicad-cli export and validation tools require a KiCad installation mounted at /usr/bin/kicad-cli"
-ENV PATH="/app/.venv/bin:$PATH"
-ENV KICAD_MCP_TRANSPORT=streamable-http
-ENV KICAD_MCP_HOST=0.0.0.0
-ENV KICAD_MCP_KICAD_CLI=/usr/bin/kicad-cli
-EXPOSE 3334
+  && useradd --system --gid kicadmcp --home-dir /app --shell /usr/sbin/nologin kicadmcp
+
+COPY --from=builder /dist/ /tmp/dist/
+COPY docker-entrypoint.sh /usr/local/bin/kicad-mcp-pro-entrypoint
+RUN python -m pip install --no-cache-dir \
+    --requirement /tmp/dist/requirements.txt \
+    /tmp/dist/*.whl \
+  && rm -rf /tmp/dist \
+  && chmod 0755 /usr/local/bin/kicad-mcp-pro-entrypoint
+
 USER kicadmcp
-CMD ["kicad-mcp-pro", "--transport", "http"]
+ENTRYPOINT ["kicad-mcp-pro-entrypoint"]

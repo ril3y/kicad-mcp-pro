@@ -23,6 +23,9 @@ on:
       approval:
         description: "Type APPROVE_RELEASE to confirm publishing"
         required: false
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -32,6 +35,11 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
+
+env:
+  EFFECTIVE_VERSION: ${{ inputs.version || github.ref_name }}
+  EFFECTIVE_PUBLISH: ${{ github.event_name == 'push' && (vars.AUTO_RELEASE_PUBLISH || 'false') || inputs.publish || 'false' }}
+  EFFECTIVE_INDEX: ${{ github.event_name == 'push' && (vars.AUTO_RELEASE_INDEX || 'PyPI') || inputs.index || 'TestPyPI' }}
 
 jobs:
   release:
@@ -43,13 +51,35 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: refs/tags/${{ inputs.version }}
+          ref: ${{ env.EFFECTIVE_VERSION }}
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Validate release target
+        run: |
+          set -euo pipefail
+          version="${EFFECTIVE_VERSION#v}"
+          if ! [[ "${EFFECTIVE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Release version must be a v-prefixed semantic tag, got: ${EFFECTIVE_VERSION}" >&2
+            exit 1
+          fi
+          case "${EFFECTIVE_INDEX}" in
+            PyPI|TestPyPI) ;;
+            *)
+              echo "Unsupported release index: ${EFFECTIVE_INDEX}" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${EFFECTIVE_PUBLISH}" != "true" ] && [ "${EFFECTIVE_PUBLISH}" != "false" ]; then
+            echo "EFFECTIVE_PUBLISH must be true or false, got: ${EFFECTIVE_PUBLISH}" >&2
+            exit 1
+          fi
+          echo "Release target: ${EFFECTIVE_VERSION} (${version}) on ${EFFECTIVE_INDEX}; publish=${EFFECTIVE_PUBLISH}."
+
       - name: Validate approval
+        if: github.event_name == 'workflow_dispatch'
         env:
-          RELEASE_PUBLISH: ${{ inputs.publish }}
+          RELEASE_PUBLISH: ${{ env.EFFECTIVE_PUBLISH }}
           RELEASE_APPROVAL: ${{ inputs.approval }}
         run: |
           if [ "${RELEASE_PUBLISH}" = "true" ] && [ "${RELEASE_APPROVAL}" != "APPROVE_RELEASE" ]; then
@@ -60,11 +90,12 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version-file: .node-version
-          cache: npm
+          package-manager-cache: false
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           python-version: "3.12"
+          enable-cache: false
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
@@ -75,32 +106,6 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
-
-      - name: Verify required release secrets
-        env:
-          RELEASE_INDEX: ${{ inputs.index }}
-          RELEASE_PUBLISH: ${{ inputs.publish }}
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ "${RELEASE_PUBLISH}" != "true" ]; then
-            echo "Publish disabled; release token check skipped."
-            exit 0
-          fi
-          case "${RELEASE_INDEX}" in
-            PyPI) required_secret="PYPI_TOKEN" ;;
-            TestPyPI) required_secret="TEST_PYPI_TOKEN" ;;
-            *)
-              echo "Unsupported release index: ${RELEASE_INDEX}" >&2
-              exit 1
-              ;;
-          esac
-          if [ -z "${!required_secret:-}" ]; then
-            echo "Missing required GitHub Actions secret: ${required_secret}" >&2
-            exit 1
-          fi
-          echo "Required release secret is configured: ${required_secret}."
 
       - name: Install dependencies
         run: |
@@ -113,6 +118,27 @@ jobs:
 
       - name: Build
         run: corepack npm run build
+
+      - name: Stage Python distributions for package index
+        run: |
+          set -euo pipefail
+          rm -rf dist-pypi
+          mkdir -p dist-pypi
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          source = Path("dist")
+          target = Path("dist-pypi")
+          packages = sorted(source.glob("*.whl")) + sorted(source.glob("*.tar.gz"))
+          if not packages:
+              raise SystemExit("No Python wheel or source distribution found in dist/.")
+          for package in packages:
+              shutil.copy2(package, target / package.name)
+          print("Staged Python distributions:")
+          for package in packages:
+              print(f"- {target / package.name}")
+          PY
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
@@ -146,6 +172,7 @@ jobs:
           # The project setup-uv step exports Python 3.12 settings for package
           # checks. The pinned Sigstore action bootstraps its own Python 3.14
           # environment, so isolate uv to keep the action self-contained.
+          UV_NO_CONFIG: "1"
           UV_CACHE_DIR: ${{ runner.temp }}/sigstore-uv-cache
           UV_PYTHON: "3.14"
           UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/sigstore-uv-python-dir
@@ -158,36 +185,71 @@ jobs:
             dist/SHA256SUMS.txt
           upload-signing-artifacts: true
 
-      - name: Publish
-        if: inputs.publish == 'true'
-        env:
-          RELEASE_INDEX: ${{ inputs.index }}
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
-        # TODO (OPERATIONS.md): Migrate to OIDC Trusted Publishing.
-        # Until then, scripts/publish.sh uses twine with token-based PyPI secrets.
-        run: bash scripts/publish.sh
+      - name: Publish to PyPI
+        if: env.EFFECTIVE_PUBLISH == 'true' && env.EFFECTIVE_INDEX == 'PyPI'
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          packages-dir: dist-pypi/
+          skip-existing: true
+
+      - name: Publish to TestPyPI
+        if: env.EFFECTIVE_PUBLISH == 'true' && env.EFFECTIVE_INDEX == 'TestPyPI'
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist-pypi/
+          skip-existing: true
 
       - name: Post-publish smoke check
-        if: inputs.publish == 'true'
+        if: env.EFFECTIVE_PUBLISH == 'true'
         run: |
-          sleep 30
-          pip install --index-url https://pypi.org/simple/ \
-            "kicad-mcp-pro==$(uv run python -c 'import kicad_mcp; print(kicad_mcp.__version__)')" \
-            --dry-run || true
-          echo "Smoke check complete."
+          set -euo pipefail
+          version="$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          case "${RELEASE_INDEX}" in
+            PyPI)
+              index_url="https://pypi.org/simple/"
+              ;;
+            TestPyPI)
+              index_url="https://test.pypi.org/simple/"
+              ;;
+            *)
+              echo "::error::Unsupported release index: ${RELEASE_INDEX}"
+              exit 1
+              ;;
+          esac
+          pip_args=(--index-url "${index_url}")
+          if [ "${RELEASE_INDEX}" = "TestPyPI" ]; then
+            pip_args+=(--extra-index-url "https://pypi.org/simple/")
+          fi
+          echo "Waiting for ${RELEASE_INDEX} simple index propagation..."
+          for attempt in {1..10}; do
+            if python -m pip install "${pip_args[@]}" \
+              "kicad-mcp-pro==${version}" \
+              --dry-run; then
+              echo "Smoke check passed: kicad-mcp-pro ${version} is available on ${RELEASE_INDEX}."
+              exit 0
+            fi
+            if [ "${attempt}" -lt 10 ]; then
+              echo "Smoke check attempt ${attempt}/10 failed; retrying in 30 s..."
+              sleep 30
+            fi
+          done
+          echo "::error::Smoke check failed: kicad-mcp-pro ${version} was not available on ${RELEASE_INDEX} after 10 attempts."
+          exit 1
+        env:
+          RELEASE_INDEX: ${{ env.EFFECTIVE_INDEX }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: release-dist-${{ inputs.version }}
+          name: release-dist-${{ env.EFFECTIVE_VERSION }}
           path: dist/
           retention-days: 14
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN || github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_PUBLISH: ${{ inputs.publish }}
+          RELEASE_VERSION: ${{ env.EFFECTIVE_VERSION }}
+          RELEASE_PUBLISH: ${{ env.EFFECTIVE_PUBLISH }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -219,3 +281,4 @@ jobs:
           else
             gh release create "${RELEASE_VERSION}" "${create_args[@]}" "${assets[@]}"
           fi
+

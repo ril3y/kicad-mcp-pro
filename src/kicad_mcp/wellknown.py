@@ -59,7 +59,7 @@ def get_wellknown_metadata() -> dict[str, object]:
         "description": "Project-aware PCB and schematic workflows for KiCad",
         "profiles": available_profiles(),
         "kicad_version_required": "10.x preferred, 9.x best effort",
-        "docs": "https://oaslananka.github.io/kicad-mcp-pro",
-        "registry": "io.github.oaslananka/kicad-mcp-pro",
+        "docs": "https://oaslananka-lab.github.io/kicad-mcp-pro",
+        "registry": "io.github.oaslananka-lab/kicad-mcp-pro",
         "last_updated": _SERVER_CARD_LAST_UPDATED,
     }

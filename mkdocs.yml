@@ -1,7 +1,7 @@
 site_name: KiCad MCP Pro
-site_url: https://oaslananka.github.io/kicad-mcp-pro
-repo_url: https://github.com/oaslananka/kicad-mcp-pro
-repo_name: oaslananka/kicad-mcp-pro
+site_url: https://oaslananka-lab.github.io/kicad-mcp-pro
+repo_url: https://github.com/oaslananka-lab/kicad-mcp-pro
+repo_name: oaslananka-lab/kicad-mcp-pro
 theme:
   name: material
   palette:
@@ -53,7 +53,13 @@ nav:
   - API Stability: api-stability.md
   - Maintenance Policy: maintenance-policy.md
   - Workflow Security: workflow-security.md
+  - Publishing: publishing.md
   - Demo Media: demo-media.md
+  - Automation:
+      - Jules: automation/jules.md
+  - Install:
+      - Docker: install/docker.md
+      - Client Config Generator: install/client-config-generator.md
   - KiCad 10:
       - Variants: kicad10/variants.md
       - Time-Domain Tuning: kicad10/time-domain.md
@@ -75,7 +81,9 @@ nav:
       - HTTP Mode: deployment/http-mode.md
       - Security: deployment/security.md
       - Threat Model: security/threat-model.md
+      - Release Integrity: security/release-integrity.md
       - Release Process: release-process.md
+      - Runtime Matrix: status/runtime-matrix.md
   - Workflows:
       - First PCB: workflows/first-pcb.md
       - Schematic to PCB: workflows/schematic-to-pcb.md

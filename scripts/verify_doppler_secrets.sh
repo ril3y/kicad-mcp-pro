@@ -4,16 +4,20 @@ set -euo pipefail
 : "${DOPPLER_PROJECT:=all}"
 : "${DOPPLER_CONFIG:=main}"
 
+required_secrets=(
+  CODECOV_TOKEN
+  DOPPLER_GITHUB_SERVICE_TOKEN
+  SAFETY_API_KEY
+)
+
 missing=()
-while IFS= read -r line; do
-  line="${line%$'\r'}"
-  [[ -z "$line" || "$line" =~ ^# ]] && continue
-  if ! doppler secrets get "$line" --plain \
+for secret_name in "${required_secrets[@]}"; do
+  if ! doppler secrets get "$secret_name" --plain \
         --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" \
         >/dev/null 2>&1; then
-    missing+=("$line")
+    missing+=("$secret_name")
   fi
-done < .doppler/secrets.txt
+done
 
 if [ "${#missing[@]}" -gt 0 ]; then
   printf 'Missing Doppler secrets in %s/%s:\n' "$DOPPLER_PROJECT" "$DOPPLER_CONFIG" >&2
@@ -21,4 +25,4 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "All Doppler secrets present in ${DOPPLER_PROJECT}/${DOPPLER_CONFIG}."
+echo "All required Doppler secrets from docs/doppler-setup.md are present in ${DOPPLER_PROJECT}/${DOPPLER_CONFIG}."

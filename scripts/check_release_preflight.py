@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tomllib
@@ -39,20 +40,23 @@ def _collect_versions() -> dict[str, str]:
     mcp = _read_json("mcp.json")
     server = _read_json("server.json")
     manifest = _read_json(".release-please-manifest.json")
-    packages = server.get("packages")
-    if not isinstance(packages, list) or not packages:
-        raise ValueError("server.json packages must be a non-empty list")
-    package0 = packages[0]
-    if not isinstance(package0, dict):
-        raise TypeError("server.json packages[0] must be an object")
-    return {
+    versions = {
         "pyproject.toml": _project_version(),
         "src/kicad_mcp/__init__.py": _init_version(),
         "mcp.json": str(mcp.get("version", "")),
         "server.json": str(server.get("version", "")),
-        "server.json packages[0]": str(package0.get("version", "")),
         ".release-please-manifest.json": str(manifest.get(".", "")),
     }
+    for source, data in (("mcp.json", mcp), ("server.json", server)):
+        packages = data.get("packages")
+        if not isinstance(packages, list) or not packages:
+            raise ValueError(f"{source} packages must be a non-empty list")
+        for index, package in enumerate(packages):
+            if not isinstance(package, dict):
+                raise TypeError(f"{source} packages[{index}] must be an object")
+            if "version" in package:
+                versions[f"{source} packages[{index}]"] = str(package.get("version", ""))
+    return versions
 
 
 def _check_versions() -> list[str]:
@@ -82,8 +86,17 @@ def _changelog_section(changelog: str, version: str) -> str:
 def _check_changelog(version: str) -> list[str]:
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     errors: list[str] = []
+
     if "## [Unreleased]" not in changelog:
         errors.append("CHANGELOG.md must retain an Unreleased section")
+
+    # Release-please auto-generates CHANGELOG from git commit history and may
+    # include old "Bump version to X.Y.Z" messages from past chore commits.
+    # These are not human errors, so skip the noise check on release-please
+    # branches. GITHUB_HEAD_REF is set by GitHub Actions on pull_request events.
+    head_ref = os.environ.get("GITHUB_HEAD_REF", "")
+    if head_ref.startswith("release-please--"):
+        return errors
 
     current_section = _changelog_section(changelog, version)
     if not current_section:

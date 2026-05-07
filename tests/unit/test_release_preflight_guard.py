@@ -23,6 +23,7 @@ def test_release_preflight_scans_only_current_changelog_section(
     monkeypatch,
 ) -> None:
     module = _load_script("check_release_preflight.py")
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text(
         """

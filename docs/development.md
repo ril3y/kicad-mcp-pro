@@ -9,6 +9,12 @@ task install
 task hooks
 ```
 
+## Local Setup
+
+`npm run workflows:lint` and `task workflows:lint` require `actionlint` on
+`PATH`. Install it from <https://github.com/rhysd/actionlint> before running the
+full local workflow lint gate.
+
 ## Daily Workflow
 
 ```bash

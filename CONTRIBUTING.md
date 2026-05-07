@@ -58,7 +58,7 @@ corepack npm run check
 ## Commit Messages
 
 - Conventional Commits are required by the `commit-msg` hook.
-- Use prefixes such as `feat:`, `fix:`, `docs:`, `perf:`, `security:`, `deps:`, `refactor:`, `test:`, `ci:`, `build:`, and `chore:`.
+- Use prefixes such as `feat:`, `fix:`, `docs:`, `perf:`, `security:`, `deps:`, `refactor:`, `test:`, `ci:`, `build:`, `registry:`, `package:`, and `chore:`.
 
 ## Pull Requests
 

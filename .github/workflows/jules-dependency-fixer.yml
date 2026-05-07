@@ -1,0 +1,94 @@
+name: Jules Dependency Fixer
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Dependency task mode"
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - consolidate-dependabot
+          - security-only
+          - socket-alerts
+      max_prs:
+        description: "Maximum dependency PRs Jules should inspect"
+        default: "5"
+        required: true
+        type: string
+      target_branch:
+        description: "Base branch"
+        default: main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: jules-dependency-fixer-${{ inputs.target_branch }}
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    name: Ask Jules to consolidate dependency work
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      HAS_JULES_API_KEY: ${{ secrets.JULES_API_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Validate Jules configuration
+        run: |
+          set -euo pipefail
+          if [ "${HAS_JULES_API_KEY}" != "true" ]; then
+            echo "::error::JULES_API_KEY is required for dependency fixer runs."
+            exit 1
+          fi
+
+      - name: Invoke Jules
+        uses: google-labs-code/jules-action@bff7875eaa123cac6742b7cfc51005b95ba4d566 # v1.0.0
+        with:
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ inputs.target_branch }}
+          include_last_commit: false
+          include_commit_log: true
+          prompt: |
+            You are consolidating dependency maintenance for oaslananka-lab/kicad-mcp-pro.
+            Use branch chore/dependency-hardening-jules.
+
+            Mode: ${{ inputs.mode }}
+            Maximum open dependency PRs to inspect: ${{ inputs.max_prs }}
+
+            Objectives:
+            - List open Dependabot PRs.
+            - Classify updates as patch, minor, major, or security.
+            - Identify breaking changes before changing files.
+            - Update uv, npm, and other lockfiles consistently.
+            - Respect Python 3.12+, uv, PyPI/TestPyPI, MCP registry, Docker/GHCR, mypy, pytest, and ruff gates.
+            - Document postponed major updates with reasons.
+            - Update dependabot grouping or ignore rules only when justified by observed noise or breakage.
+            - Open a PR only when validation is green.
+
+            Hard constraints:
+            - Do not blindly merge Dependabot PRs.
+            - Do not publish anything.
+            - Do not merge anything.
+            - Do not modify secrets or variables.
+            - Do not weaken CI, tests, coverage, lint, type, workflow, or security gates.
+            - Do not trigger release, PyPI/TestPyPI, Docker/GHCR, npm, Homebrew, Scoop, MCP registry, GitHub Release, SBOM, Sigstore, or attestation publishing.
+
+            Required validation:
+            - corepack npm ci
+            - uv sync --all-extras --frozen
+            - uv run python -m pytest tests/unit/ -q
+            - uv run ruff format --check src/ tests/ scripts/
+            - uv run ruff check src/ tests/ scripts/
+            - uv run python -m mypy src/kicad_mcp/
+            - corepack npm run workflows:lint
+            - uv run python scripts/validate_mcp_manifest.py, if present

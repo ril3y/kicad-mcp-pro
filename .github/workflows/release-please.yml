@@ -20,9 +20,15 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Validate token
+        run: |
+          if [ -z "${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN }}" ]; then
+            echo "::error::DOPPLER_GITHUB_SERVICE_TOKEN is required."
+            exit 1
+          fi
       - id: release_please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7
         with:
-          token: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN || github.token }}
+          token: ${{ secrets.DOPPLER_GITHUB_SERVICE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

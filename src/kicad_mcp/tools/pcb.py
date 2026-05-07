@@ -115,6 +115,30 @@ def _limit[T](items: Iterable[T]) -> tuple[list[T], int]:
     return collected[: cfg.max_items_per_response], len(collected)
 
 
+def _iter_board_pads_with_refs() -> list[tuple[_PadLike, str]]:
+    """Return (pad, footprint_reference) tuples for every pad on the live board.
+
+    kipy's ``Pad`` class has no ``parent`` back-reference, so consumers must
+    walk ``board.get_footprints()`` and inspect each footprint's
+    ``definition.pads``. Centralizing the iteration here ensures every
+    consumer goes through the same code path (and lets tests exercise the
+    real production iteration with parent-less fakes).
+
+    Footprints without a ``definition`` attribute are skipped — that path
+    is only relevant for older kipy builds or test fakes; we don't want a
+    single-footprint quirk to bring down the whole walk.
+    """
+    pad_entries: list[tuple[_PadLike, str]] = []
+    for fp in get_board().get_footprints():
+        ref = str(fp.reference_field.text.value)
+        definition = getattr(fp, "definition", None)
+        if definition is None:
+            continue
+        for pad in getattr(definition, "pads", ()):
+            pad_entries.append((cast(_PadLike, pad), ref))
+    return pad_entries
+
+
 def _page_size(requested: int) -> int:
     if requested < 1:
         raise ValueError("page_size must be at least 1.")
@@ -1852,13 +1876,13 @@ def register(mcp: FastMCP) -> None:
     @requires_kicad_running
     def pcb_get_pads() -> str:
         """List board pads."""
-        pads, total = _limit(cast(Iterable[_PadLike], get_board().get_pads()))
-        if not pads:
+        pad_entries, total = _limit(_iter_board_pads_with_refs())
+        if not pad_entries:
             return "No pads are present on the active board."
         lines = [f"Pads ({total} total):"]
-        for index, pad in enumerate(pads, start=1):
+        for index, (pad, ref) in enumerate(pad_entries, start=1):
             lines.append(
-                f"{index}. {pad.parent.reference_field.text.value}:{pad.number} "
+                f"{index}. {ref}:{pad.number} "
                 f"net={pad.net.name or '(none)'} "
                 f"@ ({nm_to_mm(_coord_nm(pad.position, 'x')):.2f}, "
                 f"{nm_to_mm(_coord_nm(pad.position, 'y')):.2f}) mm"
@@ -1968,8 +1992,8 @@ def register(mcp: FastMCP) -> None:
                 "Open the board in KiCad and rerun this tool."
             )
 
-        pads = cast(list[_PadLike], list(get_board().get_pads()))
-        if len(pads) < 2:
+        pads_with_ref = _iter_board_pads_with_refs()
+        if len(pads_with_ref) < 2:
             return "At least two pads are required to evaluate creepage clearance."
 
         required_mm = _required_creepage_mm(
@@ -1979,7 +2003,7 @@ def register(mcp: FastMCP) -> None:
         )
         worst_pair: tuple[float, str, str, str, str] | None = None
 
-        for left_index, left_pad in enumerate(pads):
+        for left_index, (left_pad, left_ref) in enumerate(pads_with_ref):
             left_net = str(getattr(getattr(left_pad, "net", None), "name", "") or "")
             if not left_net:
                 continue
@@ -1987,10 +2011,9 @@ def register(mcp: FastMCP) -> None:
             left_radius_mm = nm_to_mm(max(_coord_nm(left_size, "x"), _coord_nm(left_size, "y"))) / 2
             left_x_mm = nm_to_mm(_coord_nm(left_pad.position, "x"))
             left_y_mm = nm_to_mm(_coord_nm(left_pad.position, "y"))
-            left_ref = str(left_pad.parent.reference_field.text.value)
             left_pin = str(left_pad.number)
 
-            for right_pad in pads[left_index + 1 :]:
+            for right_pad, right_ref in pads_with_ref[left_index + 1 :]:
                 right_net = str(getattr(getattr(right_pad, "net", None), "name", "") or "")
                 if not right_net or right_net == left_net:
                     continue
@@ -2005,7 +2028,6 @@ def register(mcp: FastMCP) -> None:
                     0.0,
                     center_distance_mm - left_radius_mm - right_radius_mm,
                 )
-                right_ref = str(right_pad.parent.reference_field.text.value)
                 right_pin = str(right_pad.number)
                 candidate = (
                     edge_distance_mm,
@@ -3592,12 +3614,16 @@ def register(mcp: FastMCP) -> None:
             )
 
         board = get_board()
-        pads = cast(list[_PadLike], board.get_pads())
+        # Iterate (pad, ref) pairs together via the shared helper — kipy's
+        # ``Pad`` has no ``parent`` back-reference, and we deliberately do
+        # NOT use a dict keyed by ``pad.id`` because that's a protobuf
+        # ``KIID`` Message and Messages aren't hashable.
+        pad_entries = _iter_board_pads_with_refs()
         tracks = cast(list[Track], board.get_tracks())
         zones: list[Zone] = []
         created = 0
 
-        for pad in pads:
+        for pad, pad_ref in pad_entries:
             net_name = str(getattr(getattr(pad, "net", None), "name", ""))
             net_class_name = str(
                 getattr(getattr(pad, "net", None), "netclass_name", "")
@@ -3680,9 +3706,9 @@ def register(mcp: FastMCP) -> None:
                     ]
                 )
                 zone = Zone()
-                zone.name = (
-                    f"MCP_Teardrop_{getattr(pad.parent.reference_field.text, 'value', 'PAD')}"
-                )
+                # ``pad_ref`` was paired with ``pad`` by the outer
+                # ``_iter_board_pads_with_refs`` walk — no parent traversal.
+                zone.name = f"MCP_Teardrop_{pad_ref or 'PAD'}"
                 zone.layers = [track.layer]
                 zone.net = track.net if hasattr(track.net, "proto") else _find_net(track_net_name)
                 zone.outline = polygon

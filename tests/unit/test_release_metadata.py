@@ -74,8 +74,13 @@ def test_release_metadata_is_synchronised() -> None:
     assert server_json["$schema"] == REGISTRY_SCHEMA
     assert server_json["version"] == version
     assert server_json["packages"][0]["version"] == version
+    assert all(package["version"] == version for package in server_json["packages"])
+    assert all(package["version"] == version for package in mcp_json["packages"])
     assert mcp_json["version"] == version
-    assert "<!-- mcp-name: io.github.oaslananka/kicad-mcp-pro -->" in readme
+    assert server_json["name"] == "io.github.oaslananka-lab/kicad-mcp-pro"
+    assert server_json["repository"]["url"] == "https://github.com/oaslananka-lab/kicad-mcp-pro"
+    assert mcp_json["repository"]["url"] == "https://github.com/oaslananka-lab/kicad-mcp-pro"
+    assert "<!-- mcp-name: io.github.oaslananka-lab/kicad-mcp-pro -->" in readme
     assert "development/v2-migration.md" in mkdocs
     assert "| `3.x`   | Yes" in security
     assert "CVE-2025-69872" in security

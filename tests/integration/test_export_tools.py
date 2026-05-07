@@ -227,6 +227,7 @@ async def test_export_3d_pdf_and_bom_forward_active_variant_to_cli(
             supports_render=True,
             supports_3d_pdf=True,
             supports_spice_netlist=True,
+            supports_cli_variant=True,
         ),
     )
 

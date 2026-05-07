@@ -1,21 +1,73 @@
 {
-  "name": "io.github.oaslananka/kicad-mcp-pro",
-  "displayName": "KiCad MCP Pro Server",
-  "description": "Compatibility metadata for KiCad MCP Pro. Prefer server.json for official MCP Registry publication.",
-  "version": "3.1.8",
+  "name": "io.github.oaslananka-lab/kicad-mcp-pro",
+  "title": "KiCad MCP Pro",
+  "display_name": "KiCad MCP Pro",
+  "description": "MCP server for KiCad schematic, PCB, validation, DFM, and export workflows.",
+  "version": "3.2.1",
+  "repository": {
+    "url": "https://github.com/oaslananka-lab/kicad-mcp-pro",
+    "source": "github"
+  },
+  "homepage": "https://github.com/oaslananka/kicad-mcp-pro",
+  "websiteUrl": "https://oaslananka-lab.github.io/kicad-mcp-pro",
   "license": "MIT",
-  "repository": "https://github.com/oaslananka/kicad-mcp-pro",
-  "homepage": "https://oaslananka.github.io/kicad-mcp-pro",
-  "tools": true,
-  "transports": [
-    "stdio",
-    "streamable-http"
+  "categories": [
+    "eda",
+    "kicad",
+    "pcb-design",
+    "automation"
   ],
-  "resources": true,
-  "prompts": true,
+  "keywords": [
+    "kicad",
+    "mcp",
+    "model-context-protocol",
+    "eda",
+    "pcb",
+    "schematic",
+    "gerber"
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registry": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "kicad-mcp-pro",
+      "name": "kicad-mcp-pro",
+      "version": "3.2.1",
+      "command": "kicad-mcp-pro",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "oci",
+      "registry": "container",
+      "registryBaseUrl": "https://ghcr.io",
+      "identifier": "ghcr.io/oaslananka-lab/kicad-mcp-pro:3.2.1",
+      "image": "ghcr.io/oaslananka-lab/kicad-mcp-pro",
+      "version": "3.2.1",
+      "command": "kicad-mcp-pro",
+      "runtimeHint": "docker",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "mcp": {
+    "transports": [
+      "stdio"
+    ],
+    "command": "kicad-mcp-pro"
+  },
   "platforms": [
     "windows",
     "macos",
     "linux"
-  ]
+  ],
+  "capabilities": {
+    "tools": true,
+    "resources": true,
+    "prompts": true
+  }
 }

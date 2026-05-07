@@ -15,6 +15,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from dataclasses import asdict
 from typing import Any, Protocol, cast
 
 import anyio
@@ -37,6 +38,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from typer.models import OptionInfo
 
 from . import __version__
+from .capabilities import all_records as all_capability_records
 from .config import KiCadMCPConfig, get_config, reset_config
 from .connection import KiCadConnectionError, get_board
 from .diagnostics import DiagnosticReport, build_doctor_report, build_health_report
@@ -50,6 +52,10 @@ from .wellknown import get_wellknown_metadata
 
 logger = structlog.get_logger(__name__)
 app = typer.Typer(help="KiCad MCP Pro server for PCB and schematic workflows.")
+tools_app = typer.Typer(help="Inspect registered MCP tools.")
+mcp_config_app = typer.Typer(help="Generate MCP client configuration snippets.")
+app.add_typer(tools_app, name="tools")
+app.add_typer(mcp_config_app, name="mcp-config")
 AnyFunction = Callable[..., object]
 
 
@@ -118,9 +124,6 @@ CLI_FAILURE_TOOL_NAMES: frozenset[str] = frozenset(
         "export_svg",
         "export_dxf",
         "get_board_stats",
-        "route_export_dsn",
-        "route_autoroute_freerouting",
-        "route_import_ses",
     }
 )
 _TOOL_LIMITERS: dict[str, anyio.CapacityLimiter] = {}
@@ -269,9 +272,16 @@ def _tool_failure_message(tool_name: str, result: object) -> str | None:
 
 
 def _status_from_result(result: object) -> tuple[str, str | None]:
-    if isinstance(result, mcp_types.CallToolResult) and result.isError:
+    if isinstance(result, mcp_types.CallToolResult):
+        if result.isError:
+            structured = result.structuredContent or {}
+            return "error", str(structured.get("error_code", "TOOL_ERROR"))
+        # ToolResult-returning tools embed ok=False inside structuredContent.result
+        # rather than setting isError; surface those as errors for metrics/audit.
         structured = result.structuredContent or {}
-        return "error", str(structured.get("error_code", "TOOL_ERROR"))
+        inner = structured.get("result")
+        if isinstance(inner, dict) and not inner.get("ok", True):
+            return "error", "TOOL_RESULT_FAILURE"
     return "ok", None
 
 
@@ -1026,6 +1036,43 @@ def _diagnostic_command(builder: Callable[[], DiagnosticReport], *, as_json: boo
         raise typer.Exit(1)
 
 
+def _strict_diagnostic_exit_code(report: DiagnosticReport) -> int:
+    if any(check.status == "error" for check in report.checks):
+        return 2
+    if any(check.name == "kicad_cli" and check.status == "warn" for check in report.checks):
+        return 3
+    if report.status == "degraded":
+        return 1
+    return 0
+
+
+def _strict_diagnostic_command(builder: Callable[[], DiagnosticReport], *, as_json: bool) -> None:
+    try:
+        if as_json:
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = builder()
+        else:
+            report = builder()
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "status": "error",
+            "error": {
+                "code": "CONFIGURATION_ERROR",
+                "message": str(exc),
+                "hint": "Fix malformed KiCad MCP configuration and retry.",
+                "retryable": False,
+            },
+        }
+        error = cast(dict[str, object], payload["error"])
+        typer.echo(json.dumps(payload, indent=2) if as_json else str(error["message"]))
+        raise typer.Exit(2) from exc
+    _echo_report(report, as_json=as_json)
+    exit_code = _strict_diagnostic_exit_code(report)
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
 @app.command()
 def health(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
@@ -1037,9 +1084,118 @@ def health(
 @app.command()
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Use stable non-zero exit codes for degraded runtime states.",
+    ),
 ) -> None:
     """Run deeper diagnostics without treating unavailable KiCad as fatal."""
+    if strict:
+        _strict_diagnostic_command(build_doctor_report, as_json=json_output)
+        return
     _diagnostic_command(build_doctor_report, as_json=json_output)
+
+
+def _jsonable(value: object) -> object:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, frozenset):
+        return sorted(value)
+    return value
+
+
+def _tool_payload(tool: mcp_types.Tool) -> dict[str, object]:
+    dumped = tool.model_dump(mode="json", exclude_none=True)
+    return {
+        "name": dumped.get("name"),
+        "description": dumped.get("description", ""),
+        "inputSchema": dumped.get("inputSchema", {}),
+        "annotations": dumped.get("annotations", {}),
+    }
+
+
+@tools_app.command("list")
+def list_tools_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    profile: str | None = typer.Option(
+        None, help=f"Server profile: {', '.join(available_profiles())}"
+    ),
+) -> None:
+    """List MCP tools available for the selected profile."""
+    if profile is not None and profile not in available_profiles():
+        raise typer.BadParameter(f"Unsupported profile: {profile}")
+    with contextlib.redirect_stdout(io.StringIO()):
+        server = build_server(profile, defer_registration=False)
+    sync_list = getattr(server, "list_tools_sync", None)
+    if not callable(sync_list):
+        raise typer.Exit(2)
+    tools = sorted(
+        cast(Callable[[], list[mcp_types.Tool]], sync_list)(), key=lambda tool: tool.name
+    )
+    payload = [_tool_payload(tool) for tool in tools]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    for tool in payload:
+        typer.echo(str(tool["name"]))
+
+
+@app.command("capabilities")
+def capabilities_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """List registered capability metadata."""
+    records = sorted(all_capability_records().values(), key=lambda record: record.name)
+    payload = [
+        {key: _jsonable(value) for key, value in asdict(record).items()} for record in records
+    ]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    for record in payload:
+        typer.echo(str(record["name"]))
+
+
+def _client_config_payload(client: str) -> str:
+    server_name = "kicad-mcp-pro"
+    stdio_server = {"command": "uvx", "args": ["kicad-mcp-pro"]}
+    if client in {"claude", "cursor"}:
+        return json.dumps({"mcpServers": {server_name: stdio_server}}, indent=2)
+    if client == "vscode":
+        payload = {
+            "servers": {
+                server_name: {
+                    "type": "stdio",
+                    **stdio_server,
+                }
+            }
+        }
+        return json.dumps(payload, indent=2)
+    if client == "codex":
+        return "\n".join(
+            [
+                "[mcp_servers.kicad-mcp-pro]",
+                'command = "uvx"',
+                'args = ["kicad-mcp-pro"]',
+            ]
+        )
+    raise typer.BadParameter(f"Unsupported client: {client}")
+
+
+@mcp_config_app.command("generate")
+def generate_mcp_config_command(
+    client: str = typer.Option(
+        ...,
+        "--client",
+        help="Client target: claude, cursor, vscode, or codex.",
+    ),
+) -> None:
+    """Generate a minimal stdio MCP client configuration."""
+    normalized = client.strip().casefold()
+    if normalized not in {"claude", "cursor", "vscode", "codex"}:
+        raise typer.BadParameter(f"Unsupported client: {client}")
+    typer.echo(_client_config_payload(normalized))
 
 
 @app.command("version")
