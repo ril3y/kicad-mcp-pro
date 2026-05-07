@@ -46,6 +46,21 @@ _LAYER_ATTRS: Final[dict[str, str]] = {
     "Eco2_User": "BL_Eco2_User",
 }
 
+# KiCad 7+ "friendly" layer names. KiCad's UI surfaces ``F.Silkscreen``
+# while the canonical S-expression token remains ``F.SilkS``. Users (and
+# kicad-cli output) routinely mix these forms — accept both shapes plus
+# the underscore variants we use as canonical keys.
+_FRIENDLY_ALIASES: Final[dict[str, str]] = {
+    "F.Silkscreen": "F_SilkS",
+    "B.Silkscreen": "B_SilkS",
+    "F.Courtyard": "F_CrtYd",
+    "B.Courtyard": "B_CrtYd",
+    "User.Drawings": "Dwgs_User",
+    "User.Comments": "Cmts_User",
+    "User.Eco1": "Eco1_User",
+    "User.Eco2": "Eco2_User",
+}
+
 _ALIASES: Final[dict[str, str]] = {
     "F.Cu": "F_Cu",
     "B.Cu": "B_Cu",
@@ -63,6 +78,10 @@ _ALIASES: Final[dict[str, str]] = {
     "Cmts.User": "Cmts_User",
     "Eco1.User": "Eco1_User",
     "Eco2.User": "Eco2_User",
+    **_FRIENDLY_ALIASES,
+    # Underscore form mirrors of the friendly names — users who normalize
+    # ``F.Silkscreen`` → ``F_Silkscreen`` should resolve too.
+    **{name.replace(".", "_"): canonical for name, canonical in _FRIENDLY_ALIASES.items()},
 }
 
 
