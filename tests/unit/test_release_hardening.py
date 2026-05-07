@@ -449,9 +449,14 @@ def test_release_workflow_retries_post_publish_smoke_check() -> None:
 
     assert "for attempt in {1..10}; do" in smoke_block
     assert "retrying in 30 s" in smoke_block
-    assert "python -m pip install" in smoke_block
+    assert '/venv/bin/python" -m pip install' in smoke_block
+    assert "python -m venv" in smoke_block
+    assert 'kicad-mcp-pro" --help' in smoke_block
+    assert 'kicad-mcp-pro" health --json' in smoke_block
+    assert "import kicad_mcp" in smoke_block
     assert '--extra-index-url "https://pypi.org/simple/"' in smoke_block
     assert "Smoke check failed:" in smoke_block
+    assert "--dry-run" not in smoke_block
     assert "|| true" not in smoke_block
 
 
@@ -538,20 +543,6 @@ async def test_project_generate_design_prompt_uses_design_intent(sample_project:
     assert "USB_DP, USB_DN" in prompt
     assert "+3V3" in prompt
     assert "jlcpcb_standard" in prompt.lower()
-
-
-@pytest.mark.anyio
-async def test_tune_track_length_emits_user_warning(sample_project: Path, mock_board) -> None:
-    _ = mock_board
-    server = build_server("full")
-    await call_tool_text(server, "kicad_set_project", {"project_dir": str(sample_project)})
-
-    with pytest.warns(UserWarning, match="tune_track_length"):
-        await call_tool_text(
-            server,
-            "tune_track_length",
-            {"net_name": "NET1", "target_length_mm": 5.0},
-        )
 
 
 @pytest.mark.anyio

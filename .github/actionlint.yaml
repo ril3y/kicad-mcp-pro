@@ -1,0 +1,5 @@
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      # actionlint v1.7.7 does not know this GitHub-hosted public preview label yet.
+      - 'label "windows-2025-vs2026" is unknown'

@@ -36,6 +36,7 @@ async def test_route_autoroute_freerouting_smoke_handles_large_dsn(
         return subprocess.CompletedProcess(cmd, 0, stdout="pass 4\n100% routed\nok", stderr="")
 
     monkeypatch.setattr("kicad_mcp.utils.freerouting.subprocess.run", fake_run)
+    monkeypatch.setattr("kicad_mcp.utils.freerouting._docker_available", lambda _: True)
 
     server = build_server("pcb")
     await call_tool_text(server, "kicad_set_project", {"project_dir": str(sample_project)})

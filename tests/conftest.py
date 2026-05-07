@@ -27,7 +27,7 @@ def tool_text(result: object) -> str:
         return tool_text(content)
     if isinstance(result, dict):
         return json.dumps(result)
-    if isinstance(result, Iterable) and not isinstance(result, (str, bytes, dict)):
+    if isinstance(result, Iterable) and not isinstance(result, str | bytes | dict):
         parts = []
         for item in result:
             if hasattr(item, "text"):

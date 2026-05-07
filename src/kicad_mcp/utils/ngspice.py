@@ -152,7 +152,7 @@ def _as_real_list(values: object) -> list[float]:
             item = array.item()
             return [float(item.real if isinstance(item, complex) else item)]
         return [float(item.real if isinstance(item, complex) else item) for item in array.tolist()]
-    if isinstance(values, (int, float)):
+    if isinstance(values, int | float):
         return [float(values)]
     if isinstance(values, list):
         return [float(cast(float, item)) for item in values]
@@ -173,7 +173,7 @@ def _as_complex_list(values: object) -> list[complex]:
         return [complex(item) for item in array.tolist()]
     if isinstance(values, complex):
         return [values]
-    if isinstance(values, (int, float)):
+    if isinstance(values, int | float):
         return [complex(float(values), 0.0)]
     if isinstance(values, list):
         return [complex(item) for item in values]

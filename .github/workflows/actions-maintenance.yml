@@ -1,0 +1,170 @@
+name: Actions Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Maintenance operation"
+        type: choice
+        required: true
+        default: report
+        options:
+          - report
+          - classify-latest
+          - cancel-superseded-pr-runs
+          - rerun-infra-only
+          - stale-deployments
+          - stale-tags
+      dry_run:
+        description: "Print planned mutations without applying them"
+        type: choice
+        required: true
+        default: "true"
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  actions: write
+  deployments: read
+
+concurrency:
+  group: actions-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    name: Manual Actions maintenance
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout canonical repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run maintenance mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "Mode: ${MODE}; dry_run=${DRY_RUN}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+          list_failed_runs() {
+            gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --status failure \
+              --limit 20 \
+              --json databaseId,name,displayTitle,headBranch,event,conclusion,url \
+              --template '{{range .}}{{printf "- %v %s [%s] %s\n" .databaseId .name .headBranch .url}}{{end}}'
+          }
+
+          classify_latest() {
+            local ids
+            ids="$(gh run list --repo "${GITHUB_REPOSITORY}" --status failure --limit 5 --json databaseId --jq '.[].databaseId')"
+            if [ -z "${ids}" ]; then
+              echo "No failed runs found."
+              return
+            fi
+            while read -r run_id; do
+              [ -z "${run_id}" ] && continue
+              echo "### Run ${run_id}" | tee -a "${GITHUB_STEP_SUMMARY}"
+              node scripts/classify-gh-failure.mjs --repo "${GITHUB_REPOSITORY}" --run-id "${run_id}" \
+                | tee -a "${GITHUB_STEP_SUMMARY}"
+            done <<< "${ids}"
+          }
+
+          cancel_superseded_pr_runs() {
+            local runs
+            runs="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --status in_progress \
+              --event pull_request \
+              --limit 100 \
+              --json databaseId,headBranch,createdAt,name,url \
+              --jq 'group_by(.headBranch)[] | sort_by(.createdAt) | .[0:-1][] | @base64')"
+            if [ -z "${runs}" ]; then
+              echo "No superseded in-progress PR runs found."
+              return
+            fi
+            while read -r encoded; do
+              [ -z "${encoded}" ] && continue
+              run_json="$(printf '%s' "${encoded}" | base64 -d)"
+              run_id="$(printf '%s' "${run_json}" | jq -r '.databaseId')"
+              run_url="$(printf '%s' "${run_json}" | jq -r '.url')"
+              echo "Superseded PR run: ${run_id} ${run_url}"
+              if [ "${DRY_RUN}" = "false" ]; then
+                gh run cancel "${run_id}" --repo "${GITHUB_REPOSITORY}"
+              fi
+            done <<< "${runs}"
+          }
+
+          rerun_infra_only() {
+            local ids
+            ids="$(gh run list --repo "${GITHUB_REPOSITORY}" --status failure --limit 10 --json databaseId --jq '.[].databaseId')"
+            while read -r run_id; do
+              [ -z "${run_id}" ] && continue
+              classification="$(node scripts/classify-gh-failure.mjs --repo "${GITHUB_REPOSITORY}" --run-id "${run_id}" --json | jq -r '.classification')"
+              echo "Run ${run_id}: ${classification}"
+              if [ "${classification}" = "infra-flake" ]; then
+                if [ "${DRY_RUN}" = "false" ]; then
+                  gh run rerun "${run_id}" --repo "${GITHUB_REPOSITORY}" --failed
+                else
+                  echo "Would rerun failed jobs for ${run_id}."
+                fi
+              fi
+            done <<< "${ids}"
+          }
+
+          stale_deployments() {
+            gh api "repos/${GITHUB_REPOSITORY}/deployments?per_page=20" \
+              --jq '.[] | "- \(.id) \(.environment) \(.ref) \(.created_at)"'
+            echo "Historical failed deployments are records. This workflow does not delete or rewrite them."
+          }
+
+          stale_tags() {
+            echo "Version tags without a GitHub Release:"
+            tags="$(git tag -l 'v*.*.*' --sort=-v:refname | head -n 20)"
+            while read -r tag; do
+              [ -z "${tag}" ] && continue
+              if ! gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+                echo "- ${tag}"
+              fi
+            done <<< "${tags}"
+            echo "This workflow never deletes tags."
+          }
+
+          case "${MODE}" in
+            report)
+              list_failed_runs
+              ;;
+            classify-latest)
+              classify_latest
+              ;;
+            cancel-superseded-pr-runs)
+              cancel_superseded_pr_runs
+              ;;
+            rerun-infra-only)
+              rerun_infra_only
+              ;;
+            stale-deployments)
+              stale_deployments
+              ;;
+            stale-tags)
+              stale_tags
+              ;;
+            *)
+              echo "::error::Unsupported maintenance mode: ${MODE}"
+              exit 1
+              ;;
+          esac
+
+          {
+            echo
+            echo "No releases, packages, tags, or mirror force pushes are created by this workflow."
+          } >> "${GITHUB_STEP_SUMMARY}"

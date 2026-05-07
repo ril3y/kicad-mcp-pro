@@ -138,6 +138,8 @@ Operational references:
 
 - [Repository operations](docs/repository-operations.md)
 - [Publishing](docs/publishing.md)
+- [Release controller](docs/automation/release-controller.md)
+- [Release state machine](docs/release-state-machine.md)
 - [Jules automation](docs/automation/jules.md)
 - [Autonomy model](docs/autonomy.md)
 - [Doppler setup](docs/doppler-setup.md)

@@ -171,9 +171,26 @@ def _matches_layer_filter(layer: int, filter_layer: str) -> bool:
 
 
 def _find_net(name: str) -> Net:
-    net = Net()
-    net.name = name
-    return net
+    """Resolve a net name to the live ``Net`` instance on the active board.
+
+    Pre-fix this constructed a bare ``Net()`` carrying only the requested
+    name — no proto code, no real linkage — so callers assigning the result
+    to ``track.net`` / ``via.net`` / ``zone.net`` ended up with a ghost net
+    that didn't match any net on the board. KiCad either silently mis-routed
+    or auto-allocated a stray net, both of which produce broken DRC.
+
+    The lookup walks ``board.get_nets()``. A typo or bogus name raises
+    :class:`ValueError` so the failure surfaces immediately instead of
+    leaking through as a silent net-mis-assignment downstream.
+    """
+    board = get_board()
+    for net in cast(Iterable[Net], board.get_nets()):
+        if net.name == name:
+            return net
+    raise ValueError(
+        f"Net '{name}' was not found on the active board. "
+        f"Use pcb_get_nets() to list available net names."
+    )
 
 
 def _board_file_layer_name(layer_name: str) -> str:

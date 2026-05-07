@@ -5,6 +5,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from kipy.board_types import Net
 from kipy.proto.board import board_types_pb2
 from kipy.proto.board.board_types_pb2 import BoardLayer, ViaType
 from kipy.proto.common import types as common_types
@@ -13,6 +14,13 @@ from kicad_mcp.server import build_server
 from kicad_mcp.tools.validation import GateOutcome
 from kicad_mcp.utils.sexpr import _extract_block
 from tests.conftest import call_tool_text
+
+
+def _net(name: str) -> Net:
+    """Build a kipy ``Net`` instance for tests that drive `_find_net` lookup."""
+    n = Net()
+    n.name = name
+    return n
 
 
 def _footprint_position(pcb_text: str, reference: str) -> tuple[float, float, int]:
@@ -440,6 +448,7 @@ async def test_pcb_read_tools_report_active_board_items(
 
 @pytest.mark.anyio
 async def test_pcb_add_track_creates_item(mock_board) -> None:
+    mock_board.get_nets.return_value = [_net("NET1")]
     server = build_server("pcb")
     await server.call_tool(
         "pcb_add_track",
@@ -1367,6 +1376,7 @@ async def test_pcb_set_keepout_zone_creates_rule_area(mock_board) -> None:
 
 @pytest.mark.anyio
 async def test_pcb_add_zone_creates_copper_zone(mock_board) -> None:
+    mock_board.get_nets.return_value = [_net("GND_DIG")]
     server = build_server("pcb")
 
     result = await call_tool_text(
@@ -1399,6 +1409,7 @@ async def test_pcb_add_zone_creates_copper_zone(mock_board) -> None:
 
 @pytest.mark.anyio
 async def test_pcb_add_teardrops_creates_helper_zones(mock_board) -> None:
+    mock_board.get_nets.return_value = [_net("VCC")]
     pad = SimpleNamespace(
         position=SimpleNamespace(x_nm=0, y_nm=0),
         size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
@@ -1538,6 +1549,7 @@ async def test_pcb_set_stackup_persists_file_and_supports_impedance_lookup(
 
 @pytest.mark.anyio
 async def test_pcb_add_blind_and_micro_via_configure_layer_pairs(mock_board) -> None:
+    mock_board.get_nets.return_value = [_net("USB_DP"), _net("USB_DN")]
     server = build_server("pcb")
 
     blind = await call_tool_text(
