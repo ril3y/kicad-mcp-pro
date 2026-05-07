@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import math
 import re
-import warnings
 from pathlib import Path
 from typing import Any, cast
 
-import structlog
 from kipy.board_types import Net, Track
 from kipy.geometry import Vector2
 from mcp.server.fastmcp import Context, FastMCP
@@ -27,7 +25,6 @@ from .export_support import _get_pcb_file
 from .metadata import headless_compatible, requires_dependency, requires_kicad_running
 from .routing_rules import _load_rules_content, _mm, _rules_file_path, _upsert_rule, _write_rule
 
-logger = structlog.get_logger(__name__)
 __all__ = [
     "_load_rules_content",
     "_mm",
@@ -701,10 +698,10 @@ def register(mcp: FastMCP) -> None:
             )
             if matching is not None:
                 raw_factor = matching.get("propagation_speed_factor", propagation_speed_factor)
-                if isinstance(raw_factor, (int, float)):
+                if isinstance(raw_factor, int | float):
                     propagation_speed_factor = float(raw_factor)
                 raw_impedance = matching.get("trace_impedance_ohm", profile_impedance_ohm)
-                if isinstance(raw_impedance, (int, float)):
+                if isinstance(raw_impedance, int | float):
                     profile_impedance_ohm = float(raw_impedance)
 
         if layer:
@@ -777,18 +774,6 @@ def register(mcp: FastMCP) -> None:
         else:
             lines.append(f"Fallback target length: {target_mm:.3f} mm")
         return "\n".join(lines)
-
-    @mcp.tool()
-    @headless_compatible
-    def tune_track_length(net_name: str, target_length_mm: float) -> str:
-        """Backward-compatible alias for route_tune_length()."""
-        logger.warning("deprecated_tune_track_length", replacement="route_tune_length")
-        warnings.warn(
-            "tune_track_length() is deprecated; use route_tune_length() instead.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return str(route_tune_length(net_name, target_length_mm))
 
     @mcp.tool()
     @headless_compatible

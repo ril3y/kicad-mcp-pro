@@ -46,18 +46,44 @@ Review the mirror plan without writing to the personal repository:
 
 ```bash
 gh workflow run mirror-personal.yml --repo oaslananka-lab/kicad-mcp-pro \
-  -f dry_run=true
+  -f dry_run=true \
+  -f ref_scope=main-and-tags
 ```
 
 Mirror after reviewing the plan:
 
 ```bash
 gh workflow run mirror-personal.yml --repo oaslananka-lab/kicad-mcp-pro \
-  -f dry_run=false
+  -f dry_run=false \
+  -f force_mirror=false \
+  -f ref_scope=main-and-tags
 ```
 
-The workflow refuses force updates unless `force_mirror=true` is provided in a
-manual dispatch.
+The workflow refuses force updates unless `force_mirror=true`,
+`approval=MIRROR_CANONICAL_TO_PERSONAL`, and a manual `workflow_dispatch` run are
+used. Divergent tags should be recovered one tag at a time with `tag_name`.
+
+See [Personal Showcase Mirror](automation/mirror-personal.md) for stale tag
+recovery.
+
+## Release Control Plane
+
+The release control plane is manual-only and read-first:
+
+- `scripts/release-state.mjs` reports release state, blockers, and the next safe
+  command.
+- `.github/workflows/release-controller.yml` dispatches the existing guarded
+  release and mirror workflows only after state checks.
+- `.github/workflows/actions-maintenance.yml` lists and classifies failed runs,
+  reports stale deployments/tags, and can rerun infra-only failures when
+  explicitly requested.
+
+References:
+
+- [Release controller](automation/release-controller.md)
+- [Release state machine](release-state-machine.md)
+- [Failure classifier](automation/failure-classifier.md)
+- [Review thread gate](automation/review-thread-gate.md)
 
 ## Mirror Recovery
 

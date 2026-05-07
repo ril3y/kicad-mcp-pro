@@ -1,0 +1,224 @@
+name: Release Controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Controlled release operation to run"
+        type: choice
+        required: true
+        default: dry-run
+        options:
+          - dry-run
+          - testpypi
+          - pypi
+          - mirror
+          - full-safe
+      version:
+        description: "v-prefixed semantic version, for example v3.2.1"
+        required: true
+        type: string
+      approval:
+        description: "Type APPROVE_RELEASE for publish steps"
+        required: false
+        type: string
+      allow_pypi:
+        description: "Allow production PyPI dispatch when all other guards pass"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: release-controller
+  cancel-in-progress: false
+
+jobs:
+  controller:
+    name: Controlled release dispatch
+    if: github.repository == 'oaslananka-lab/kicad-mcp-pro'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout canonical repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate requested version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::version must be a v-prefixed semantic version, got ${RELEASE_VERSION}"
+            exit 1
+          fi
+
+      - name: Inspect release state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release-state.mjs --version "${RELEASE_VERSION}" --json-out release-state.json
+          node - <<'NODE' >> "${GITHUB_OUTPUT}"
+          const fs = require("node:fs");
+          const state = JSON.parse(fs.readFileSync("release-state.json", "utf8"));
+          const output = (name, value) => {
+            const encoded = String(value ?? "").replaceAll("\n", "%0A");
+            console.log(`${name}=${encoded}`);
+          };
+          output("current_state", state.current_state);
+          output("blocker_count", state.blockers.length);
+          output("testpypi_published", state.testpypi.published);
+          output("pypi_published", state.pypi.published);
+          output("next_safe_command", state.next_safe_command);
+          NODE
+          {
+            echo "## Release Controller State"
+            echo
+            node scripts/release-state.mjs --version "${RELEASE_VERSION}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Stop on blockers
+        if: steps.state.outputs.blocker_count != '0'
+        run: |
+          echo "::error::release-state reported blockers. Review the job summary before dispatching release workflows."
+          exit 1
+
+      - name: Dispatch selected operation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          APPROVAL: ${{ inputs.approval }}
+          ALLOW_PYPI: ${{ inputs.allow_pypi }}
+          TESTPYPI_PUBLISHED: ${{ steps.state.outputs.testpypi_published }}
+          PYPI_PUBLISHED: ${{ steps.state.outputs.pypi_published }}
+        run: |
+          set -euo pipefail
+
+          dispatch_release() {
+            local index="$1"
+            local publish="$2"
+            echo "Dispatching release.yml: version=${RELEASE_VERSION}, index=${index}, publish=${publish}"
+            gh workflow run release.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              -f version="${RELEASE_VERSION}" \
+              -f index="${index}" \
+              -f publish="${publish}" \
+              -f approval="${APPROVAL}"
+          }
+
+          wait_latest_release_run() {
+            sleep 12
+            local run_id
+            run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+            if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
+              echo "::error::Could not locate the dispatched release.yml run."
+              exit 1
+            fi
+            echo "Watching release.yml run ${run_id}."
+            gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+          }
+
+          dispatch_mirror() {
+            if [ "${PYPI_PUBLISHED}" != "true" ]; then
+              echo "::error::mirror mode requires a successful PyPI publication state first."
+              exit 1
+            fi
+            echo "Dispatching advisory personal mirror without force."
+            gh workflow run mirror-personal.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              -f dry_run=false \
+              -f force_mirror=false \
+              -f ref_scope=main-and-tags \
+              -f tag_name="${RELEASE_VERSION}" \
+              -f approval=""
+          }
+
+          dispatch_pypi() {
+            if [ "${ALLOW_PYPI}" != "true" ] || [ "${APPROVAL}" != "APPROVE_RELEASE" ]; then
+              echo "::error::PyPI dispatch requires allow_pypi=true and approval=APPROVE_RELEASE."
+              exit 1
+            fi
+            if [ "${PYPI_PUBLISHED}" = "true" ]; then
+              echo "PyPI already contains ${RELEASE_VERSION}; not dispatching a duplicate publish."
+              exit 0
+            fi
+            if [ "${TESTPYPI_PUBLISHED}" != "true" ]; then
+              echo "::error::PyPI dispatch requires TestPyPI publication to be observed first."
+              exit 1
+            fi
+            dispatch_release "PyPI" "true"
+          }
+
+          case "${MODE}" in
+            dry-run)
+              dispatch_release "TestPyPI" "false"
+              ;;
+            testpypi)
+              if [ "${APPROVAL}" != "APPROVE_RELEASE" ]; then
+                echo "::error::TestPyPI publish dispatch requires approval=APPROVE_RELEASE."
+                exit 1
+              fi
+              if [ "${TESTPYPI_PUBLISHED}" = "true" ]; then
+                echo "TestPyPI already contains ${RELEASE_VERSION}; not dispatching a duplicate publish."
+                exit 0
+              fi
+              dispatch_release "TestPyPI" "true"
+              ;;
+            pypi)
+              dispatch_pypi
+              ;;
+            mirror)
+              dispatch_mirror
+              ;;
+            full-safe)
+              dispatch_release "TestPyPI" "false"
+              wait_latest_release_run
+              if [ "${TESTPYPI_PUBLISHED}" != "true" ]; then
+                if [ "${APPROVAL}" != "APPROVE_RELEASE" ]; then
+                  echo "Dry-run succeeded. Stop before TestPyPI/PyPI because approval was not provided."
+                  exit 0
+                fi
+                dispatch_release "TestPyPI" "true"
+                echo "TestPyPI publish was dispatched. Stop before PyPI until TestPyPI success is observed."
+                exit 0
+              fi
+              if [ "${ALLOW_PYPI}" = "true" ] && [ "${APPROVAL}" = "APPROVE_RELEASE" ]; then
+                dispatch_pypi
+              else
+                echo "TestPyPI is already published. Stop before PyPI without allow_pypi=true and approval=APPROVE_RELEASE."
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported mode: ${MODE}"
+              exit 1
+              ;;
+          esac
+
+      - name: Final summary
+        if: always()
+        env:
+          MODE: ${{ inputs.mode }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          CURRENT_STATE: ${{ steps.state.outputs.current_state }}
+          NEXT_SAFE_COMMAND: ${{ steps.state.outputs.next_safe_command }}
+        run: |
+          {
+            echo "## Release Controller Result"
+            echo
+            echo "- Mode: ${MODE}"
+            echo "- Version: ${RELEASE_VERSION}"
+            echo "- Initial state: ${CURRENT_STATE}"
+            echo "- Next safe command before dispatch: \`${NEXT_SAFE_COMMAND}\`"
+            echo
+            echo "This controller does not publish directly. It only dispatches guarded workflows."
+          } >> "${GITHUB_STEP_SUMMARY}"

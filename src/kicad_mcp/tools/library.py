@@ -886,7 +886,7 @@ def register(mcp: FastMCP) -> None:
                     # Pass if any number in the description falls within [lo, hi]
                     if not any(lo <= n <= hi for n in nums):
                         return False
-                elif isinstance(val, (int, float)):
+                elif isinstance(val, int | float):
                     target = float(val) * scale
                     # Pass if any number in the description is >= target (treat as minimum)
                     if nums and not any(n >= target * 0.8 for n in nums):

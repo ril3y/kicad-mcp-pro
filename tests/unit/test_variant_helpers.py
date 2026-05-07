@@ -120,7 +120,7 @@ def _patch_variant_args_dependencies(
         "kicad_mcp.tools.export.variant_apply_to_kicad_cli_args",
         lambda variant_name=None: list(variant_args),
     )
-    monkeypatch.setattr("kicad_mcp.tools.export.get_config", lambda: _FakeConfig())
+    monkeypatch.setattr("kicad_mcp.tools.export.get_config", _FakeConfig)
     monkeypatch.setattr(
         "kicad_mcp.tools.export.get_cli_capabilities",
         lambda _cli: CliCapabilities(

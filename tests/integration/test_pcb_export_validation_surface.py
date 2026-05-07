@@ -247,6 +247,7 @@ async def test_pcb_and_routing_surface(
         return subprocess.CompletedProcess(cmd, 0, stdout="autorouted", stderr="")
 
     monkeypatch.setattr("kicad_mcp.utils.freerouting.subprocess.run", fake_freerouting_run)
+    monkeypatch.setattr("kicad_mcp.utils.freerouting._docker_available", lambda _: True)
 
     cfg = get_config()
     cfg.enable_experimental_tools = True
@@ -417,9 +418,7 @@ async def test_pcb_and_routing_surface(
                 "meander_amplitude_mm": 0.8,
             },
         ),
-        await call_tool_text(
-            server, "tune_track_length", {"net_name": "NET1", "target_length_mm": 5.0}
-        ),
+        await call_tool_text(server, "route_tune_length", {"net_name": "NET1", "target_mm": 5.0}),
         await call_tool_text(
             server,
             "tune_diff_pair_length",

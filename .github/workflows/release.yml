@@ -205,6 +205,12 @@ jobs:
         run: |
           set -euo pipefail
           version="$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          smoke_root="$(mktemp -d)"
+          # shellcheck disable=SC2317
+          cleanup() {
+            rm -rf "${smoke_root}"
+          }
+          trap cleanup EXIT
           case "${RELEASE_INDEX}" in
             PyPI)
               index_url="https://pypi.org/simple/"
@@ -223,9 +229,13 @@ jobs:
           fi
           echo "Waiting for ${RELEASE_INDEX} simple index propagation..."
           for attempt in {1..10}; do
-            if python -m pip install "${pip_args[@]}" \
-              "kicad-mcp-pro==${version}" \
-              --dry-run; then
+            rm -rf "${smoke_root}/venv"
+            python -m venv "${smoke_root}/venv"
+            "${smoke_root}/venv/bin/python" -m pip install --upgrade pip
+            if "${smoke_root}/venv/bin/python" -m pip install "${pip_args[@]}" "kicad-mcp-pro==${version}" &&
+              "${smoke_root}/venv/bin/kicad-mcp-pro" --help &&
+              "${smoke_root}/venv/bin/kicad-mcp-pro" health --json &&
+              "${smoke_root}/venv/bin/python" -c 'import kicad_mcp; print(kicad_mcp.__version__)'; then
               echo "Smoke check passed: kicad-mcp-pro ${version} is available on ${RELEASE_INDEX}."
               exit 0
             fi
@@ -281,4 +291,3 @@ jobs:
           else
             gh release create "${RELEASE_VERSION}" "${create_args[@]}" "${assets[@]}"
           fi
-

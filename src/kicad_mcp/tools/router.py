@@ -24,15 +24,12 @@ EXPERIMENTAL_TOOL_NAMES: frozenset[str] = frozenset(
         "sch_reload",
     }
 )
-DEPRECATED_TOOL_NAMES: frozenset[str] = frozenset({"tune_track_length"})
 
 
 def _display_tool_name(tool_name: str) -> str:
     suffixes: list[str] = []
     if tool_name in EXPERIMENTAL_TOOL_NAMES:
         suffixes.append("EXPERIMENTAL")
-    if tool_name in DEPRECATED_TOOL_NAMES:
-        suffixes.append("DEPRECATED")
     metadata = get_tool_metadata(tool_name)
     if metadata is not None:
         if metadata.headless_compatible:
@@ -311,7 +308,6 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "route_set_net_class_rules",
             "route_differential_pair",
             "route_tune_length",
-            "tune_track_length",
             "tune_diff_pair_length",
             "route_create_tuning_profile",
             "route_list_tuning_profiles",
