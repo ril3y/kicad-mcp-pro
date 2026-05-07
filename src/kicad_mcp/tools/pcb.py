@@ -2566,7 +2566,10 @@ def register(mcp: FastMCP) -> None:
                 logger.debug("footprint_angle_not_supported", error=str(exc))
         elif hasattr(footprint, "orientation"):
             try:
-                footprint.orientation = rotation_deg
+                # kipy's orientation setter calls ``.normalize180()`` on its
+                # argument (board_types.py:1769) — must be an Angle, not a
+                # raw float.
+                footprint.orientation = Angle.from_degrees(rotation_deg)
             except Exception as exc:
                 logger.debug("footprint_orientation_not_supported", error=str(exc))
         with board_transaction() as board:

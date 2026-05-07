@@ -141,6 +141,59 @@ async def test_pcb_summary_tool(mock_board) -> None:
 
 
 @pytest.mark.anyio
+async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
+    mock_board,
+) -> None:
+    """pcb_move_footprint must wrap rotation_deg in Angle for kipy's setter.
+
+    Regression target: kipy's FootprintInstance.orientation setter calls
+    ``.normalize180()`` on its argument (board_types.py:1769). A raw float
+    raises AttributeError, the bare ``except`` swallows it at DEBUG, and the
+    rotation silently drops. This test gives the fake footprint an
+    ``orientation`` property (not ``angle``) whose setter mimics kipy's
+    contract, so the buggy path is exercised end-to-end.
+    """
+
+    class _OrientationFootprint:
+        # No ``angle`` attribute — forces the elif-orientation branch.
+        def __init__(self) -> None:
+            self.reference_field = SimpleNamespace(
+                text=SimpleNamespace(value="R1")
+            )
+            self.position = None
+            self._orientation = None
+
+        @property
+        def orientation(self):  # type: ignore[no-untyped-def]
+            return self._orientation
+
+        @orientation.setter
+        def orientation(self, value) -> None:  # type: ignore[no-untyped-def]
+            # Mimics kipy's setter (board_types.py:1769) — requires Angle.
+            value.normalize180()
+            self._orientation = value
+
+    footprint = _OrientationFootprint()
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_move_footprint",
+        {"reference": "R1", "x_mm": 12.0, "y_mm": 6.0, "rotation_deg": 90.0},
+    )
+
+    assert "Moved footprint 'R1'" in result
+    # The rotation MUST have been applied — silent drop is the bug.
+    assert footprint.orientation is not None, (
+        "rotation_deg was silently dropped — orientation setter never received "
+        "an Angle instance"
+    )
+    assert footprint.orientation.degrees == pytest.approx(90.0)
+    mock_board.update_items.assert_called_once()
+
+
+@pytest.mark.anyio
 async def test_pcb_read_tools_report_active_board_items(
     mock_board,
     monkeypatch: pytest.MonkeyPatch,
