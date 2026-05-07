@@ -194,6 +194,172 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
 
 
 @pytest.mark.anyio
+async def test_pcb_set_footprint_attributes_sets_dnp_and_bom_flags(
+    mock_board,
+) -> None:
+    """pcb_set_footprint_attributes must mutate exactly the requested flags."""
+
+    attrs = SimpleNamespace(
+        do_not_populate=False,
+        exclude_from_bill_of_materials=False,
+        exclude_from_position_files=False,
+        not_in_schematic=False,
+    )
+    footprint = SimpleNamespace(
+        reference_field=SimpleNamespace(text=SimpleNamespace(value="D6")),
+        attributes=attrs,
+    )
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_footprint_attributes",
+        {
+            "reference": "D6",
+            "do_not_populate": True,
+            "exclude_from_bom": True,
+        },
+    )
+
+    assert "Updated footprint 'D6'" in result
+    assert "do_not_populate=True" in result
+    assert "exclude_from_bom=True" in result
+    assert attrs.do_not_populate is True
+    assert attrs.exclude_from_bill_of_materials is True
+    # Untouched flags must NOT change.
+    assert attrs.exclude_from_position_files is False
+    assert attrs.not_in_schematic is False
+    mock_board.update_items.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_pcb_set_footprint_attributes_no_op_when_nothing_passed(
+    mock_board,
+) -> None:
+    """When no flags are passed the tool must report a no-op and not write."""
+
+    attrs = SimpleNamespace(
+        do_not_populate=False,
+        exclude_from_bill_of_materials=False,
+        exclude_from_position_files=False,
+        not_in_schematic=False,
+    )
+    footprint = SimpleNamespace(
+        reference_field=SimpleNamespace(text=SimpleNamespace(value="R1")),
+        attributes=attrs,
+    )
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_footprint_attributes",
+        {"reference": "R1"},
+    )
+
+    assert "nothing to update" in result
+    mock_board.update_items.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_pcb_set_footprint_attributes_sets_all_four_flags(
+    mock_board,
+) -> None:
+    """All four setter branches must mutate the underlying attribute.
+
+    Regression target: a typo in any branch (e.g.
+    ``attrs.exclude_from_position_file`` missing the trailing ``s``) would
+    fail this test. Without it, only do_not_populate and
+    exclude_from_bill_of_materials had positive coverage.
+    """
+
+    attrs = SimpleNamespace(
+        do_not_populate=False,
+        exclude_from_bill_of_materials=False,
+        exclude_from_position_files=False,
+        not_in_schematic=False,
+    )
+    footprint = SimpleNamespace(
+        reference_field=SimpleNamespace(text=SimpleNamespace(value="TP1")),
+        attributes=attrs,
+    )
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_footprint_attributes",
+        {
+            "reference": "TP1",
+            "do_not_populate": True,
+            "exclude_from_bom": True,
+            "exclude_from_position_files": True,
+            "not_in_schematic": True,
+        },
+    )
+
+    assert "Updated footprint 'TP1'" in result
+    assert attrs.do_not_populate is True
+    assert attrs.exclude_from_bill_of_materials is True
+    assert attrs.exclude_from_position_files is True
+    assert attrs.not_in_schematic is True
+    # All four flag names must appear in the result string.
+    assert "do_not_populate=True" in result
+    assert "exclude_from_bom=True" in result
+    assert "exclude_from_position_files=True" in result
+    assert "not_in_schematic=True" in result
+
+
+@pytest.mark.anyio
+async def test_pcb_set_footprint_attributes_can_clear_dnp(
+    mock_board,
+) -> None:
+    """Passing False explicitly must clear a previously-set flag."""
+
+    attrs = SimpleNamespace(
+        do_not_populate=True,  # was previously set
+        exclude_from_bill_of_materials=False,
+        exclude_from_position_files=False,
+        not_in_schematic=False,
+    )
+    footprint = SimpleNamespace(
+        reference_field=SimpleNamespace(text=SimpleNamespace(value="U1")),
+        attributes=attrs,
+    )
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_footprint_attributes",
+        {"reference": "U1", "do_not_populate": False},
+    )
+
+    assert "do_not_populate=False" in result
+    assert attrs.do_not_populate is False
+
+
+@pytest.mark.anyio
+async def test_pcb_set_footprint_attributes_missing_footprint(
+    mock_board,
+) -> None:
+    """Missing reference returns the expected 'not found' message."""
+
+    mock_board.get_footprints.return_value = []
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_footprint_attributes",
+        {"reference": "GHOST", "do_not_populate": True},
+    )
+
+    assert "'GHOST' was not found" in result
+    mock_board.update_items.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_pcb_read_tools_report_active_board_items(
     mock_board,
     monkeypatch: pytest.MonkeyPatch,

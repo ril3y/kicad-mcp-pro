@@ -2611,6 +2611,53 @@ def register(mcp: FastMCP) -> None:
         return f"Updated footprint '{reference}' to layer '{layer}'."
 
     @mcp.tool()
+    @requires_kicad_running
+    def pcb_set_footprint_attributes(
+        reference: str,
+        do_not_populate: bool | None = None,
+        exclude_from_bom: bool | None = None,
+        exclude_from_position_files: bool | None = None,
+        not_in_schematic: bool | None = None,
+    ) -> str:
+        """Set DNP / BOM / position-file / schematic-presence flags on a footprint.
+
+        Each flag is independent. Pass ``True`` to enable, ``False`` to clear,
+        or omit (the default) to leave that flag untouched. Useful for marking
+        DNP parts (e.g. an unpopulated TVS that's still on the BOM for v2),
+        or excluding test points from pick-and-place output.
+        """
+        footprint = _find_footprint_by_reference(reference)
+        if footprint is None:
+            return f"Footprint '{reference}' was not found on the active board."
+
+        attrs = footprint.attributes
+        changes: list[str] = []
+        if do_not_populate is not None:
+            attrs.do_not_populate = do_not_populate
+            changes.append(f"do_not_populate={do_not_populate}")
+        if exclude_from_bom is not None:
+            attrs.exclude_from_bill_of_materials = exclude_from_bom
+            changes.append(f"exclude_from_bom={exclude_from_bom}")
+        if exclude_from_position_files is not None:
+            attrs.exclude_from_position_files = exclude_from_position_files
+            changes.append(f"exclude_from_position_files={exclude_from_position_files}")
+        if not_in_schematic is not None:
+            attrs.not_in_schematic = not_in_schematic
+            changes.append(f"not_in_schematic={not_in_schematic}")
+
+        if not changes:
+            return (
+                f"No attribute flags were provided for '{reference}' — nothing "
+                f"to update. Pass any of do_not_populate, exclude_from_bom, "
+                f"exclude_from_position_files, not_in_schematic."
+            )
+
+        with board_transaction() as board:
+            board.update_items([cast(BoardItem, footprint)])
+
+        return f"Updated footprint '{reference}': {', '.join(changes)}."
+
+    @mcp.tool()
     @headless_compatible
     def add_footprint_inner_layer_graphic(
         reference: str,

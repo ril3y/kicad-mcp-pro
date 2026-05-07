@@ -130,6 +130,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_set_net_class",
             "pcb_move_footprint",
             "pcb_set_footprint_layer",
+            "pcb_set_footprint_attributes",
             "pcb_sync_from_schematic",
             "add_footprint_inner_layer_graphic",
             "pcb_add_barcode",
