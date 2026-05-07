@@ -119,7 +119,11 @@ def _active_variant_args(variant_name: str | None = None) -> list[str]:
     except Exception:
         return args
     if not caps.supports_cli_variant:
-        return []
+        raise ValueError(
+            f"The detected kicad-cli does not support --variant. "
+            f"Cannot apply variant '{args[1]}'. Upgrade to KiCad 10+ "
+            f"or run variant_set_active('default') to clear the override."
+        )
     return args
 
 
