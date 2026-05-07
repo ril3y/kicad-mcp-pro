@@ -161,12 +161,18 @@ async def test_pcb_read_tools_report_active_board_items(
         net=SimpleNamespace(name="GND"),
         type=ViaType.VT_THROUGH,
     )
+    pad = SimpleNamespace(
+        number="1",
+        net=SimpleNamespace(name="USB_DP"),
+        position=SimpleNamespace(x_nm=6_500_000, y_nm=7_500_000),
+    )
     footprint = SimpleNamespace(
         reference_field=SimpleNamespace(text=SimpleNamespace(value="U1")),
         value_field=SimpleNamespace(text=SimpleNamespace(value="MCU")),
         position=SimpleNamespace(x_nm=6_000_000, y_nm=7_000_000),
         layer=BoardLayer.BL_B_Cu,
         id=SimpleNamespace(value="fp-1"),
+        definition=SimpleNamespace(pads=[pad]),
     )
     zone = SimpleNamespace(
         name="GND_FILL",
@@ -174,19 +180,12 @@ async def test_pcb_read_tools_report_active_board_items(
         layers=[BoardLayer.BL_F_Cu, BoardLayer.BL_B_Cu],
     )
     shape = SimpleNamespace(layer=BoardLayer.BL_Edge_Cuts)
-    pad = SimpleNamespace(
-        parent=SimpleNamespace(reference_field=SimpleNamespace(text=SimpleNamespace(value="U1"))),
-        number="1",
-        net=SimpleNamespace(name="USB_DP"),
-        position=SimpleNamespace(x_nm=6_500_000, y_nm=7_500_000),
-    )
     mock_board.get_tracks.return_value = [track]
     mock_board.get_vias.return_value = [via]
     mock_board.get_footprints.return_value = [footprint]
     mock_board.get_nets.return_value = [SimpleNamespace(name="USB_DP")]
     mock_board.get_zones.return_value = [zone]
     mock_board.get_shapes.return_value = [shape]
-    mock_board.get_pads.return_value = [pad]
     mock_board.get_enabled_layers.return_value = [BoardLayer.BL_F_Cu, BoardLayer.BL_B_Cu]
     mock_board.get_selection.return_value = [track]
     mock_board.get_as_string.return_value = "(kicad_pcb " + ("x" * 1200) + ")"
@@ -1181,14 +1180,15 @@ async def test_pcb_add_zone_creates_copper_zone(mock_board) -> None:
 
 @pytest.mark.anyio
 async def test_pcb_add_teardrops_creates_helper_zones(mock_board) -> None:
-    mock_board.get_pads.return_value = [
+    pad = SimpleNamespace(
+        position=SimpleNamespace(x_nm=0, y_nm=0),
+        size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
+        net=SimpleNamespace(name="VCC"),
+    )
+    mock_board.get_footprints.return_value = [
         SimpleNamespace(
-            position=SimpleNamespace(x_nm=0, y_nm=0),
-            size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
-            net=SimpleNamespace(name="VCC"),
-            parent=SimpleNamespace(
-                reference_field=SimpleNamespace(text=SimpleNamespace(value="U1"))
-            ),
+            reference_field=SimpleNamespace(text=SimpleNamespace(value="U1")),
+            definition=SimpleNamespace(pads=[pad]),
         )
     ]
     mock_board.get_tracks.return_value = [
@@ -1362,25 +1362,23 @@ async def test_pcb_add_blind_and_micro_via_configure_layer_pairs(mock_board) -> 
 
 @pytest.mark.anyio
 async def test_pcb_check_creepage_clearance_reports_worst_pad_pair(mock_board) -> None:
-    mock_board.get_pads.return_value = [
+    pad_1 = SimpleNamespace(
+        number="1",
+        position=SimpleNamespace(x_nm=0, y_nm=0),
+        size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
+        net=SimpleNamespace(name="VIN"),
+    )
+    pad_2 = SimpleNamespace(
+        number="2",
+        position=SimpleNamespace(x_nm=2_200_000, y_nm=0),
+        size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
+        net=SimpleNamespace(name="GND"),
+    )
+    mock_board.get_footprints.return_value = [
         SimpleNamespace(
-            parent=SimpleNamespace(
-                reference_field=SimpleNamespace(text=SimpleNamespace(value="J1"))
-            ),
-            number="1",
-            position=SimpleNamespace(x_nm=0, y_nm=0),
-            size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
-            net=SimpleNamespace(name="VIN"),
-        ),
-        SimpleNamespace(
-            parent=SimpleNamespace(
-                reference_field=SimpleNamespace(text=SimpleNamespace(value="J1"))
-            ),
-            number="2",
-            position=SimpleNamespace(x_nm=2_200_000, y_nm=0),
-            size=SimpleNamespace(x_nm=1_000_000, y_nm=1_000_000),
-            net=SimpleNamespace(name="GND"),
-        ),
+            reference_field=SimpleNamespace(text=SimpleNamespace(value="J1")),
+            definition=SimpleNamespace(pads=[pad_1, pad_2]),
+        )
     ]
     server = build_server("pcb")
 

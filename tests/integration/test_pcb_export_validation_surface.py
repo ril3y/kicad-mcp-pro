@@ -51,6 +51,16 @@ def _configure_mock_board(mock_board) -> None:
         net=SimpleNamespace(name="NET1"),
         type=ViaType.VT_THROUGH,
     )
+    pad_1 = SimpleNamespace(
+        number="1",
+        net=SimpleNamespace(name="NET1"),
+        position=SimpleNamespace(x_nm=1_000_000, y_nm=2_000_000),
+    )
+    pad_2 = SimpleNamespace(
+        number="3",
+        net=SimpleNamespace(name="NET1"),
+        position=SimpleNamespace(x_nm=3_000_000, y_nm=4_000_000),
+    )
     footprint_1 = SimpleNamespace(
         reference_field=_field("R1"),
         value_field=_field("10k"),
@@ -58,6 +68,7 @@ def _configure_mock_board(mock_board) -> None:
         layer=BoardLayer.BL_F_Cu,
         id=SimpleNamespace(value="footprint-r1"),
         angle=None,
+        definition=SimpleNamespace(pads=[pad_1]),
     )
     footprint_2 = SimpleNamespace(
         reference_field=_field("U2"),
@@ -66,18 +77,7 @@ def _configure_mock_board(mock_board) -> None:
         layer=BoardLayer.BL_B_Cu,
         id=SimpleNamespace(value="footprint-u2"),
         orientation=0.0,
-    )
-    pad_1 = SimpleNamespace(
-        parent=footprint_1,
-        number="1",
-        net=SimpleNamespace(name="NET1"),
-        position=SimpleNamespace(x_nm=1_000_000, y_nm=2_000_000),
-    )
-    pad_2 = SimpleNamespace(
-        parent=footprint_2,
-        number="3",
-        net=SimpleNamespace(name="NET1"),
-        position=SimpleNamespace(x_nm=3_000_000, y_nm=4_000_000),
+        definition=SimpleNamespace(pads=[pad_2]),
     )
     zone = SimpleNamespace(
         name="GND_FILL",
@@ -101,7 +101,6 @@ def _configure_mock_board(mock_board) -> None:
     ]
     mock_board.get_zones.return_value = [zone]
     mock_board.get_shapes.return_value = [shape]
-    mock_board.get_pads.return_value = [pad_1, pad_2]
     mock_board.get_enabled_layers.return_value = [BoardLayer.BL_F_Cu, BoardLayer.BL_B_Cu]
     mock_board.get_selection.return_value = [track, footprint_1]
     mock_board.get_stackup.return_value = stackup

@@ -41,11 +41,17 @@ _TUNING_ASSIGNMENTS_FILENAME = "tuning_profile_assignments.json"
 
 
 def _find_pad(reference: str, pad_number: str) -> _PadLike | None:
-    for pad in cast(list[_PadLike], get_board().get_pads()):
-        if pad.parent.reference_field.text.value == reference and str(pad.number) == str(
-            pad_number
-        ):
-            return pad
+    # kipy's ``Pad`` class has no ``parent`` back-reference (verified against
+    # ``kipy.board_types.Pad``). Iterate footprints first and walk their pad
+    # set via ``FootprintInstance.definition.pads``.
+    board = get_board()
+    for fp in board.get_footprints():
+        if fp.reference_field.text.value != reference:
+            continue
+        for pad in fp.definition.pads:
+            if str(pad.number) == str(pad_number):
+                return cast(_PadLike, pad)
+        return None
     return None
 
 

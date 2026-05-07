@@ -48,26 +48,28 @@ def _configure_signal_integrity_board(mock_board) -> None:
         net=SimpleNamespace(name="USB_DP"),
         type=ViaType.VT_THROUGH,
     )
+    pad_vdd = SimpleNamespace(
+        number="7",
+        net=SimpleNamespace(name="3V3"),
+        position=SimpleNamespace(x_nm=10_100_000, y_nm=10_000_000),
+    )
     u1 = SimpleNamespace(
         reference_field=_field("U1"),
         value_field=_field("MCU"),
         position=SimpleNamespace(x_nm=10_000_000, y_nm=10_000_000),
+        definition=SimpleNamespace(pads=[pad_vdd]),
     )
     c1 = SimpleNamespace(
         reference_field=_field("C1"),
         value_field=_field("100n"),
         position=SimpleNamespace(x_nm=11_200_000, y_nm=10_000_000),
+        definition=SimpleNamespace(pads=[]),
     )
     c2 = SimpleNamespace(
         reference_field=_field("C2"),
         value_field=_field("1u"),
         position=SimpleNamespace(x_nm=17_500_000, y_nm=10_000_000),
-    )
-    pad_vdd = SimpleNamespace(
-        parent=u1,
-        number="7",
-        net=SimpleNamespace(name="3V3"),
-        position=SimpleNamespace(x_nm=10_100_000, y_nm=10_000_000),
+        definition=SimpleNamespace(pads=[]),
     )
     stackup = SimpleNamespace(
         layers=[
@@ -84,7 +86,6 @@ def _configure_signal_integrity_board(mock_board) -> None:
     mock_board.get_tracks.return_value = [usb_dp, usb_dn, clk1, clk2]
     mock_board.get_vias.return_value = [via]
     mock_board.get_footprints.return_value = [u1, c1, c2]
-    mock_board.get_pads.return_value = [pad_vdd]
     mock_board.get_stackup.return_value = stackup
 
 

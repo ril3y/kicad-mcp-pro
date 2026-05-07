@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
 from ..connection import get_board
-from ..models.common import _FootprintLike, _PadLike
+from ..models.common import _FootprintLike
 from ..models.signal_integrity import (
     DecouplingPlacementInput,
     DifferentialPairSkewInput,
@@ -157,10 +157,6 @@ def _board_footprints() -> list[_FootprintLike]:
     return cast(list[_FootprintLike], list(get_board().get_footprints()))
 
 
-def _board_pads() -> list[_PadLike]:
-    return cast(list[_PadLike], list(get_board().get_pads()))
-
-
 def _footprint_reference(footprint: _FootprintLike) -> str:
     return str(footprint.reference_field.text.value)
 
@@ -184,12 +180,20 @@ def _find_footprint(reference: str) -> _FootprintLike | None:
 
 
 def _find_power_anchor(ic_ref: str, power_pin: str) -> tuple[float, float]:
-    for pad in _board_pads():
-        if _footprint_reference(pad.parent) == ic_ref and str(pad.number) == power_pin:
-            return (
-                nm_to_mm(_coord_nm(pad.position, "x")),
-                nm_to_mm(_coord_nm(pad.position, "y")),
-            )
+    # kipy's ``Pad`` has no ``parent`` back-reference. Walk footprints first
+    # and inspect each footprint's pads via ``definition.pads``.
+    for footprint in _board_footprints():
+        if _footprint_reference(footprint) != ic_ref:
+            continue
+        for pad in footprint.definition.pads:
+            if str(pad.number) == power_pin:
+                return (
+                    nm_to_mm(_coord_nm(pad.position, "x")),
+                    nm_to_mm(_coord_nm(pad.position, "y")),
+                )
+        # Found the footprint but not the named pin: fall through to the
+        # footprint-centroid fallback so the SI tool can still anchor.
+        return _footprint_position_mm(footprint)
 
     footprint = _find_footprint(ic_ref)
     if footprint is None:
