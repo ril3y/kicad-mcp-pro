@@ -110,6 +110,36 @@ def _docker_available(executable: str) -> bool:
     return shutil.which(executable) is not None
 
 
+# Centralized so the same tag appears in error messages, default config, and
+# docs. Bump this when freerouting ships a CLI-compatible tag we've verified.
+RECOMMENDED_V1_IMAGE = "ghcr.io/freerouting/freerouting:1.9.0"
+
+_IMAGE_TAG_VERSION_RE = re.compile(r":v?(\d+)(?:\.|$)")
+
+
+def _freerouting_image_major_version(image: str) -> int | None:
+    """Parse the major version from a freerouting docker image reference.
+
+    Returns ``None`` for ambiguous tags (``latest``, ``nightly``, no tag,
+    SHA digests). Returns the integer major for tags like ``2.1.0``,
+    ``v1.9.0``, or ``2`` so callers can decide whether the running CLI
+    contract is compatible.
+
+    Why we care: freerouting v2.x changed the docker image entrypoint
+    from a CLI runner to an HTTP API server, so the ``-de`` / ``-do`` /
+    ``-mp`` argv we build below no longer reach the routing engine. The
+    user-visible failure is opaque ("server started, no routing"), so
+    we surface a clear error before launching the container.
+    """
+    match = _IMAGE_TAG_VERSION_RE.search(image)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 class FreeRoutingRunner:
     """Run FreeRouting against project-provided Specctra files."""
 
@@ -197,6 +227,32 @@ class FreeRoutingRunner:
                     "KICAD_MCP_FREEROUTING_JAR."
                 )
             selected_docker = False
+
+        if selected_docker:
+            major = _freerouting_image_major_version(self._docker_image)
+            if major is not None and major >= 2:
+                if jar_path is not None:
+                    # Configured JAR is the documented v2 workaround — fall
+                    # through to the java path transparently rather than
+                    # raise. Same shape as the docker-not-found fallback
+                    # above.
+                    selected_docker = False
+                else:
+                    raise RuntimeError(
+                        f"FreeRouting docker image '{self._docker_image}' "
+                        f"looks like v{major}.x, which ships an HTTP API "
+                        "server entrypoint instead of the CLI runner the "
+                        "current integration expects (-de / -do / -mp argv). "
+                        "Workarounds:\n"
+                        "  - Pin to a v1.x image, e.g. set "
+                        f"KICAD_MCP_FREEROUTING_IMAGE={RECOMMENDED_V1_IMAGE}\n"
+                        "  - Configure a local JAR: set "
+                        "KICAD_MCP_FREEROUTING_JAR=/path/to/freerouting.jar "
+                        "and rerun (the runner will then bypass docker for "
+                        "v2.x images).\n"
+                        "Tracking issue: freerouting v2 entrypoint mismatch "
+                        "(CLI vs HTTP server)."
+                    )
 
         if selected_docker:
             mount_paths = [dsn_path, output]

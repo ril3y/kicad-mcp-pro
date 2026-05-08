@@ -217,6 +217,13 @@ async def test_pcb_and_routing_surface(
     mock_board,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Pin to a v1 freerouting image so the v2-detection guard doesn't
+    # refuse the run. Default config is v2.x which now raises a clear
+    # entrypoint-mismatch error.
+    monkeypatch.setenv(
+        "KICAD_MCP_FREEROUTING_IMAGE",
+        "ghcr.io/freerouting/freerouting:1.9.0",
+    )
     _configure_mock_board(mock_board)
     server = build_server("pcb")
     await call_tool_text(server, "kicad_set_project", {"project_dir": str(sample_project)})
