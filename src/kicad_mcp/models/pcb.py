@@ -58,6 +58,33 @@ WidthMM = Annotated[
 ]
 
 
+class FootprintPlacement(BaseModel):
+    """One footprint's placement record for ``pcb_apply_placement_spec``.
+
+    Mirrors the parameters of ``pcb_move_footprint``: caller specifies the
+    reference designator + absolute board position + rotation. Batched
+    application avoids N IPC round-trips when laying out a board from a
+    spec.
+    """
+
+    reference: str = Field(min_length=1, description="Footprint refdes, e.g. 'J1'.")
+    x_mm: CoordMM = Field(description="Absolute X position in mm.")
+    y_mm: CoordMM = Field(description="Absolute Y position in mm.")
+    rotation_deg: float = Field(
+        default=0.0,
+        description="Rotation in degrees (kipy normalizes to ±180).",
+    )
+
+
+class ApplyPlacementSpecInput(BaseModel):
+    """Batched placement specification for ``pcb_apply_placement_spec``."""
+
+    placements: list[FootprintPlacement] = Field(
+        min_length=1,
+        description="List of footprint placements to apply in order.",
+    )
+
+
 class AddTrackInput(BaseModel):
     """Track insertion parameters."""
 

@@ -52,6 +52,7 @@ from ..models.pcb import (
     AddViaInput,
     AddZoneInput,
     AlignFootprintsInput,
+    ApplyPlacementSpecInput,
     AutoPlaceBySchematicInput,
     BulkTrackItem,
     CreepageCheckInput,
@@ -2683,6 +2684,77 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])
         return f"Moved footprint '{reference}' to ({x_mm}, {y_mm}) mm. {_PERSISTENCE_HINT}"
+
+    @mcp.tool()
+    @requires_kicad_running
+    def pcb_apply_placement_spec(placements: list[dict[str, object]]) -> str:
+        """Apply a batched footprint placement spec in one IPC transaction.
+
+        Each entry is a record with ``reference`` / ``x_mm`` / ``y_mm`` and
+        an optional ``rotation_deg`` (default 0.0). The tool walks the
+        list, resolves each footprint, applies position + orientation
+        with the same Angle-wrapping that ``pcb_move_footprint`` uses,
+        and ships the whole batch via a single ``board.update_items()``
+        call. Missing references are reported in the response without
+        aborting the rest — partial application is fine because the
+        common use case is laying out a fresh board from a spec where
+        a typo'd ref shouldn't undo the other 9 footprints.
+
+        Returns a summary listing successful placements, failed ones,
+        and the persistence-hint reminder. Pre-fix, callers had to
+        issue N round-trips of ``pcb_move_footprint``; this is the
+        thin spec-driven version we needed for the junction-passive
+        board build.
+        """
+        payload = ApplyPlacementSpecInput.model_validate({"placements": placements})
+
+        applied: list[str] = []
+        missing: list[str] = []
+        updated: list[BoardItem] = []
+
+        for item in payload.placements:
+            footprint = _find_footprint_by_reference(item.reference)
+            if footprint is None:
+                missing.append(item.reference)
+                continue
+            footprint.position = Vector2.from_xy_mm(item.x_mm, item.y_mm)
+            if hasattr(footprint, "angle"):
+                try:
+                    footprint.angle = Angle.from_degrees(item.rotation_deg)
+                except (AttributeError, TypeError) as exc:
+                    logger.debug(
+                        "footprint_angle_not_supported",
+                        reference=item.reference,
+                        error=str(exc),
+                    )
+            elif hasattr(footprint, "orientation"):
+                try:
+                    footprint.orientation = Angle.from_degrees(item.rotation_deg)
+                except (AttributeError, TypeError) as exc:
+                    logger.debug(
+                        "footprint_orientation_not_supported",
+                        reference=item.reference,
+                        error=str(exc),
+                    )
+            updated.append(cast(BoardItem, footprint))
+            applied.append(
+                f"{item.reference} → ({item.x_mm}, {item.y_mm}) rot={item.rotation_deg}"
+            )
+
+        if updated:
+            with board_transaction() as board:
+                board.update_items(updated)
+
+        lines = [f"Applied {len(applied)} placement(s) in one transaction."]
+        for entry in applied:
+            lines.append(f"  - {entry}")
+        if missing:
+            lines.append(
+                f"Skipped {len(missing)} missing reference(s): "
+                f"{', '.join(missing)}"
+            )
+        lines.append(_PERSISTENCE_HINT)
+        return "\n".join(lines)
 
     @mcp.tool()
     @requires_kicad_running
