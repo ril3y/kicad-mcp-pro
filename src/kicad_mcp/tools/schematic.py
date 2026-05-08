@@ -1720,13 +1720,6 @@ def run_auto_add_missing_junctions() -> str:
     return f"Inserted {inserted} missing junction(s)."
 
 
-def _get_symbol_library_dir() -> Path:
-    cfg = get_config()
-    if cfg.symbol_library_dir is None or not cfg.symbol_library_dir.exists():
-        raise FileNotFoundError("No KiCad symbol library directory is configured.")
-    return cfg.symbol_library_dir
-
-
 def _symbol_file(library: str) -> Path:
     """Resolve a symbol library name to a ``.kicad_sym`` path.
 
