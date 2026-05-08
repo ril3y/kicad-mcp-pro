@@ -31,7 +31,14 @@ from kipy.proto.common import types as common_types
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
-from ..connection import KiCadConnectionError, board_transaction, get_board
+from ..connection import (
+    PERSISTENCE_HINT as _PERSISTENCE_HINT,
+)
+from ..connection import (
+    KiCadConnectionError,
+    board_transaction,
+    get_board,
+)
 from ..models.common import _FootprintLike, _PadLike
 from ..models.pcb import (
     AddCircleInput,
@@ -86,6 +93,7 @@ DECOUPLING_RULES: dict[str, dict[str, object]] = {
     "10u": {"max_dist_mm": 10.0, "prefer_side": "same"},
 }
 STACKUP_STATE_FILE = "stackup_profile.json"
+
 _COPPER_LAYER_SEQUENCE = [
     "F_Cu",
     "In1_Cu",
@@ -609,7 +617,7 @@ def run_auto_refill_zones() -> str:
     try:
         board = _get_board()
         board.refill_zones(block=True, max_poll_seconds=60.0)
-        return "Zones refilled successfully."
+        return f"Zones refilled successfully. {_PERSISTENCE_HINT}"
     except KiCadConnectionError:
         return (
             "Zone refill skipped — KiCad is not running. "
@@ -2280,7 +2288,7 @@ def register(mcp: FastMCP) -> None:
             if payload.net_name:
                 track.net = _find_net(payload.net_name)
             board.create_items([track])
-        return "Track added successfully."
+        return f"Track added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_tracks_bulk(tracks: list[BulkTrackItem]) -> str:
@@ -2298,7 +2306,7 @@ def register(mcp: FastMCP) -> None:
             created.append(track)
         with board_transaction() as board:
             board.create_items(created)
-        return f"Added {len(created)} tracks."
+        return f"Added {len(created)} tracks. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     @requires_kicad_running
@@ -2333,7 +2341,7 @@ def register(mcp: FastMCP) -> None:
             via.net = _find_net(payload.net_name)
         with board_transaction() as board:
             board.create_items([via])
-        return "Via added successfully."
+        return f"Via added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_blind_via(
@@ -2374,7 +2382,10 @@ def register(mcp: FastMCP) -> None:
             board.create_items([via])
         from_name = resolve_layer_name(payload.from_layer)
         to_name = resolve_layer_name(payload.to_layer)
-        return f"Blind or buried via added successfully from {from_name} to {to_name}."
+        return (
+            f"Blind or buried via added successfully from {from_name} to {to_name}. "
+            f"{_PERSISTENCE_HINT}"
+        )
 
     @mcp.tool()
     def pcb_add_microvia(
@@ -2415,7 +2426,7 @@ def register(mcp: FastMCP) -> None:
             board.create_items([via])
         from_name = resolve_layer_name(payload.from_layer)
         to_name = resolve_layer_name(payload.to_layer)
-        return f"Microvia added successfully from {from_name} to {to_name}."
+        return f"Microvia added successfully from {from_name} to {to_name}. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_segment(
@@ -2442,7 +2453,7 @@ def register(mcp: FastMCP) -> None:
         segment.attributes.stroke.width = mm_to_nm(payload.width_mm)
         with board_transaction() as board:
             board.create_items([segment])
-        return "Graphic segment added successfully."
+        return f"Graphic segment added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_circle(
@@ -2467,7 +2478,7 @@ def register(mcp: FastMCP) -> None:
         circle.attributes.stroke.width = mm_to_nm(payload.width_mm)
         with board_transaction() as board:
             board.create_items([circle])
-        return "Graphic circle added successfully."
+        return f"Graphic circle added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_rectangle(
@@ -2494,7 +2505,7 @@ def register(mcp: FastMCP) -> None:
         rectangle.attributes.stroke.width = mm_to_nm(payload.width_mm)
         with board_transaction() as board:
             board.create_items([rectangle])
-        return "Graphic rectangle added successfully."
+        return f"Graphic rectangle added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_set_board_outline(
@@ -2520,7 +2531,7 @@ def register(mcp: FastMCP) -> None:
         rectangle.attributes.stroke.width = mm_to_nm(0.05)
         with board_transaction() as board:
             board.create_items([rectangle])
-        return "Board outline added successfully."
+        return f"Board outline added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_text(
@@ -2567,7 +2578,7 @@ def register(mcp: FastMCP) -> None:
             logger.debug("board_text_angle_not_supported", error=str(exc))
         with board_transaction() as board:
             board.create_items([text_item])
-        return "Board text added successfully."
+        return f"Board text added successfully. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     @headless_compatible
@@ -2607,7 +2618,7 @@ def register(mcp: FastMCP) -> None:
             kiids.append(kiid)
         with board_transaction() as board:
             board.remove_items_by_id(kiids)
-        return f"Deleted {len(kiids)} item(s)."
+        return f"Deleted {len(kiids)} item(s). {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_save() -> str:
@@ -2620,7 +2631,7 @@ def register(mcp: FastMCP) -> None:
     def pcb_refill_zones() -> str:
         """Refill all copper zones."""
         get_board().refill_zones(block=True, max_poll_seconds=60.0)
-        return "Zones refilled."
+        return f"Zones refilled. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_highlight_net(net_name: str) -> str:
@@ -2671,7 +2682,7 @@ def register(mcp: FastMCP) -> None:
                 logger.debug("footprint_orientation_not_supported", error=str(exc))
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])
-        return f"Moved footprint '{reference}' to ({x_mm}, {y_mm}) mm."
+        return f"Moved footprint '{reference}' to ({x_mm}, {y_mm}) mm. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     @requires_kicad_running
@@ -2683,7 +2694,7 @@ def register(mcp: FastMCP) -> None:
         footprint.layer = resolve_layer(layer)
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])
-        return f"Updated footprint '{reference}' to layer '{layer}'."
+        return f"Updated footprint '{reference}' to layer '{layer}'. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     @requires_kicad_running
@@ -2740,11 +2751,7 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])
 
-        return (
-            f"Updated footprint '{reference}': {', '.join(changes)}. "
-            "Call pcb_save() to persist — the change is in-memory only "
-            "and will be lost if pcbnew closes without saving."
-        )
+        return f"Updated footprint '{reference}': {', '.join(changes)}. {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     @headless_compatible
@@ -3440,7 +3447,7 @@ def register(mcp: FastMCP) -> None:
             f"- Clearance: {payload.clearance_mm:.3f} mm\n"
             f"- Minimum width: {payload.min_width_mm:.3f} mm\n"
             f"- Thermal relief: {'enabled' if payload.thermal_relief else 'solid'}\n"
-            f"- Priority: {payload.priority}"
+            f"- Priority: {payload.priority}. {_PERSISTENCE_HINT}"
         )
 
     @mcp.tool()
@@ -3515,7 +3522,7 @@ def register(mcp: FastMCP) -> None:
             current_board.create_items([zone])
         return (
             f"Added keepout zone '{payload.name}' on {len(zone.layers)} copper layer(s) "
-            f"with rules: {', '.join(payload.rules)}."
+            f"with rules: {', '.join(payload.rules)}. {_PERSISTENCE_HINT}"
         )
 
     @mcp.tool()
@@ -3864,7 +3871,10 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as current_board:
             current_board.create_items(zones)
             current_board.refill_zones(block=True, max_poll_seconds=60.0)
-        return f"Added {len(zones)} teardrop helper zone(s) to the active board."
+        return (
+            f"Added {len(zones)} teardrop helper zone(s) to the active board. "
+            f"{_PERSISTENCE_HINT}"
+        )
 
     # -----------------------------------------------------------------------
     # Force-directed placement (v2.1.0)

@@ -13,7 +13,7 @@ from kipy.geometry import Vector2
 from mcp.server.fastmcp import Context, FastMCP
 
 from ..config import get_config
-from ..connection import board_transaction, get_board
+from ..connection import PERSISTENCE_HINT, board_transaction, get_board
 from ..models.common import _PadLike
 from ..models.pcb import AddTrackInput
 from ..models.tool_result import ArtifactRef, StateDelta, ToolResult
@@ -295,7 +295,7 @@ def register(mcp: FastMCP) -> None:
             track.net = net
         with board_transaction() as board:
             board.create_items([track])
-        return "Single track routed successfully."
+        return f"Single track routed successfully. {PERSISTENCE_HINT}"
 
     @mcp.tool()
     @requires_kicad_running
@@ -354,7 +354,7 @@ def register(mcp: FastMCP) -> None:
             board.create_items(tracks)
         return (
             f"Created an orthogonal two-segment route from {ref1}:{pad1} to {ref2}:{pad2}. "
-            "Run DRC to verify the path."
+            f"Run DRC to verify the path. {PERSISTENCE_HINT}"
         )
 
     @mcp.tool()
