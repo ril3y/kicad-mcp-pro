@@ -2507,7 +2507,15 @@ def register(mcp: FastMCP) -> None:
         text_item.attributes.vertical_alignment = common_types.VA_BOTTOM
         try:
             text_item.attributes.angle = payload.rotation_deg
-        except Exception as exc:
+        except (AttributeError, TypeError) as exc:
+            # Narrow on purpose: only swallow legacy-kipy compat cases —
+            # AttributeError when the setter doesn't exist on older kipy
+            # builds, TypeError when the proto float field rejects the
+            # value. Anything else (RuntimeError from IPC failure,
+            # AssertionError from kipy's internal shape checks, kipy.errors.*)
+            # MUST propagate so genuine bugs surface instead of writing a
+            # rotation-less item silently. Pre-fix this was a bare
+            # ``except Exception`` that masked everything at DEBUG.
             logger.debug("board_text_angle_not_supported", error=str(exc))
         with board_transaction() as board:
             board.create_items([text_item])
@@ -2601,7 +2609,9 @@ def register(mcp: FastMCP) -> None:
         if hasattr(footprint, "angle"):
             try:
                 footprint.angle = Angle.from_degrees(rotation_deg)
-            except Exception as exc:
+            except (AttributeError, TypeError) as exc:
+                # Same narrow scope as the text-angle site above — see that
+                # comment for the full rationale.
                 logger.debug("footprint_angle_not_supported", error=str(exc))
         elif hasattr(footprint, "orientation"):
             try:
@@ -2609,7 +2619,7 @@ def register(mcp: FastMCP) -> None:
                 # argument (board_types.py:1769) — must be an Angle, not a
                 # raw float.
                 footprint.orientation = Angle.from_degrees(rotation_deg)
-            except Exception as exc:
+            except (AttributeError, TypeError) as exc:
                 logger.debug("footprint_orientation_not_supported", error=str(exc))
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])

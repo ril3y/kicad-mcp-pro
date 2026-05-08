@@ -156,10 +156,11 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
 
     Regression target: kipy's FootprintInstance.orientation setter calls
     ``.normalize180()`` on its argument (board_types.py:1769). A raw float
-    raises AttributeError, the bare ``except`` swallows it at DEBUG, and the
-    rotation silently drops. This test gives the fake footprint an
-    ``orientation`` property (not ``angle``) whose setter mimics kipy's
-    contract, so the buggy path is exercised end-to-end.
+    raises AttributeError, the narrow ``except (AttributeError, TypeError)``
+    swallows it at DEBUG, and the rotation silently drops. This test gives
+    the fake footprint an ``orientation`` property (not ``angle``) whose
+    setter mimics kipy's contract, so the buggy path is exercised
+    end-to-end.
     """
 
     class _OrientationFootprint:
@@ -199,6 +200,160 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
     )
     assert footprint.orientation.degrees == pytest.approx(90.0)
     mock_board.update_items.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_pcb_move_footprint_propagates_non_kipy_setter_errors(
+    mock_board,
+) -> None:
+    """A non-(AttributeError, TypeError) from the orientation setter must
+    NOT be silently swallowed.
+
+    Pre-fix the bare ``except Exception`` block masked every error type at
+    DEBUG, hiding genuine bugs (IPC failures, unexpected runtime conditions).
+    The tightened ``(AttributeError, TypeError)`` scope only tolerates the
+    legacy-kipy attribute / type-rejection cases — anything else propagates,
+    and either surfaces in the tool result or aborts before update_items.
+    """
+
+    class _RuntimeErrorOrientationFootprint:
+        def __init__(self) -> None:
+            self.reference_field = SimpleNamespace(
+                text=SimpleNamespace(value="R1")
+            )
+            self.position = None
+
+        @property
+        def orientation(self):  # type: ignore[no-untyped-def]
+            return None
+
+        @orientation.setter
+        def orientation(self, value) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError("simulated IPC failure on orientation set")
+
+    footprint = _RuntimeErrorOrientationFootprint()
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_move_footprint",
+        {"reference": "R1", "x_mm": 12.0, "y_mm": 6.0, "rotation_deg": 90.0},
+    )
+
+    # The error MUST be visible — either in the tool result string or by
+    # aborting before update_items. The pre-fix bare ``except Exception``
+    # would have swallowed the RuntimeError and reported success.
+    assert (
+        "TOOL_EXECUTION_FAILED" in result
+        or "simulated IPC failure" in result
+        or "RuntimeError" in result
+    ), f"non-narrow exception was swallowed; tool result: {result!r}"
+    mock_board.update_items.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_pcb_move_footprint_propagates_non_kipy_angle_setter_errors(
+    mock_board,
+) -> None:
+    """Same contract as the orientation test, for the parallel ``angle``
+    branch (newer kipy) at pcb.py:2606. A typo / regression that widens
+    that branch's except clause back to ``Exception`` would silently mask
+    setter failures on the ``angle`` path, so this test pins it.
+    """
+
+    class _RuntimeErrorAngleFootprint:
+        # Has ``angle`` (not ``orientation``) — forces the if-angle branch.
+        def __init__(self) -> None:
+            self.reference_field = SimpleNamespace(
+                text=SimpleNamespace(value="R1")
+            )
+            self.position = None
+
+        @property
+        def angle(self):  # type: ignore[no-untyped-def]
+            return None
+
+        @angle.setter
+        def angle(self, value) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError("simulated IPC failure on angle set")
+
+    footprint = _RuntimeErrorAngleFootprint()
+    mock_board.get_footprints.return_value = [footprint]
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_move_footprint",
+        {"reference": "R1", "x_mm": 12.0, "y_mm": 6.0, "rotation_deg": 90.0},
+    )
+
+    assert (
+        "TOOL_EXECUTION_FAILED" in result
+        or "simulated IPC failure" in result
+        or "RuntimeError" in result
+    ), f"non-narrow exception was swallowed; tool result: {result!r}"
+    mock_board.update_items.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_pcb_add_text_propagates_non_kipy_angle_setter_errors(
+    mock_board,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The third site we tightened (``text_item.attributes.angle = ...``).
+
+    ``BoardText`` is constructed inside the tool, so we monkeypatch its
+    class to return a fake whose ``attributes.angle`` setter raises. With
+    the tightened scope, the RuntimeError propagates and update_items is
+    not called. With the pre-fix bare except, the error would have been
+    silently logged at DEBUG and the tool would have written a
+    rotation-less text item to the board.
+    """
+
+    class _AnglePropFake:
+        def __init__(self) -> None:
+            self.horizontal_alignment = None
+            self.vertical_alignment = None
+            self.italic = False
+
+        @property
+        def angle(self):  # type: ignore[no-untyped-def]
+            return None
+
+        @angle.setter
+        def angle(self, value) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError("simulated IPC failure on text angle set")
+
+    class _BoardTextFake:
+        def __init__(self) -> None:
+            self.attributes = _AnglePropFake()
+            self.position = None
+            self.text = ""
+            self.layer = None
+
+    monkeypatch.setattr("kicad_mcp.tools.pcb.BoardText", _BoardTextFake)
+    server = build_server("pcb")
+
+    result = await call_tool_text(
+        server,
+        "pcb_add_text",
+        {
+            "text": "HELLO",
+            "x_mm": 1.0,
+            "y_mm": 1.0,
+            "layer": "F_SilkS",
+            "size_mm": 1.0,
+            "rotation_deg": 45.0,
+        },
+    )
+
+    assert (
+        "TOOL_EXECUTION_FAILED" in result
+        or "simulated IPC failure" in result
+        or "RuntimeError" in result
+    ), f"non-narrow exception was swallowed; tool result: {result!r}"
+    mock_board.create_items.assert_not_called()
 
 
 @pytest.mark.anyio
