@@ -32,6 +32,25 @@ class _FootprintLike(Protocol):
     # ``Pad`` has no ``parent`` back-reference, so consumers must reach pads via
     # this attribute. See ``_iter_board_pads_with_refs`` in tools/pcb.py.
     definition: object
+    # ``FootprintAttributes`` proto wrapper (see board_types.py:1495+) carrying
+    # ``do_not_populate`` / ``exclude_from_bill_of_materials`` /
+    # ``exclude_from_position_files`` / ``not_in_schematic`` bool flags. Typed
+    # as ``object`` because the kipy class isn't available everywhere we
+    # consume the Protocol; consumers (``pcb_set_footprint_attributes``) read
+    # it back as a dynamic attribute setter.
+    attributes: object
+
+
+class _FootprintAttributesLike(Protocol):
+    """Subset of kipy's ``FootprintAttributes`` proto wrapper used by
+    ``pcb_set_footprint_attributes``. Each is a settable bool — the wrapper
+    writes to the underlying proto on assignment so ``update_items`` can
+    ship the change back to pcbnew (PR #4 / PR #11)."""
+
+    do_not_populate: bool
+    exclude_from_bill_of_materials: bool
+    exclude_from_position_files: bool
+    not_in_schematic: bool
 
 
 class _PadLike(Protocol):
@@ -46,6 +65,7 @@ class _PadLike(Protocol):
 
 
 __all__ = [
+    "_FootprintAttributesLike",
     "_FootprintLike",
     "_NetLike",
     "_PadLike",

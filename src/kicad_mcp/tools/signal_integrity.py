@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from typing import Protocol, cast
 
 from kipy.proto.board.board_types_pb2 import ViaType
@@ -10,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
 from ..connection import get_board
-from ..models.common import _FootprintLike
+from ..models.common import _FootprintLike, _PadLike
 from ..models.signal_integrity import (
     DecouplingPlacementInput,
     DifferentialPairSkewInput,
@@ -181,11 +182,15 @@ def _find_footprint(reference: str) -> _FootprintLike | None:
 
 def _find_power_anchor(ic_ref: str, power_pin: str) -> tuple[float, float]:
     # kipy's ``Pad`` has no ``parent`` back-reference. Walk footprints first
-    # and inspect each footprint's pads via ``definition.pads``.
-    for footprint in _board_footprints():
-        if _footprint_reference(footprint) != ic_ref:
+    # and inspect each footprint's pads via ``definition.pads``. Use
+    # ``getattr`` with a tuple default so older kipy / test fakes lacking
+    # ``definition`` don't crash type-checking — matches the resilient
+    # walk in ``tools/pcb.py::_iter_board_pads_with_refs``.
+    for fp in _board_footprints():
+        if _footprint_reference(fp) != ic_ref:
             continue
-        for pad in footprint.definition.pads:
+        definition = getattr(fp, "definition", None)
+        for pad in cast(Iterable[_PadLike], getattr(definition, "pads", ())):
             if str(pad.number) == power_pin:
                 return (
                     nm_to_mm(_coord_nm(pad.position, "x")),
@@ -193,12 +198,12 @@ def _find_power_anchor(ic_ref: str, power_pin: str) -> tuple[float, float]:
                 )
         # Found the footprint but not the named pin: fall through to the
         # footprint-centroid fallback so the SI tool can still anchor.
-        return _footprint_position_mm(footprint)
+        return _footprint_position_mm(fp)
 
-    footprint = _find_footprint(ic_ref)
-    if footprint is None:
+    fp_or_none = _find_footprint(ic_ref)
+    if fp_or_none is None:
         raise ValueError(f"Footprint '{ic_ref}' was not found on the active board.")
-    return _footprint_position_mm(footprint)
+    return _footprint_position_mm(fp_or_none)
 
 
 def _nearest_capacitors(
