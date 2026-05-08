@@ -1521,7 +1521,12 @@ async def test_pcb_design_blocks_and_inner_layer_graphics_success(
     assert "was not found" in unknown_place
     assert "Added line inner-layer graphic" in inner
     assert '"In1.Cu"' in layers
-    assert pcb_text.count('(footprint "Resistor_SMD:R_0805"') == 4
+    # ``_footprint_block`` writes the bare footprint name straight into the
+    # ``.kicad_pcb`` fixture — no schematic-driven sync runs in this test, so
+    # the prefixed ``Library:Footprint`` form (PR #9) never gets stamped on.
+    # The other count assertions in this file deliberately use the prefixed
+    # form because they exercise the ``pcb_sync_from_schematic`` path.
+    assert pcb_text.count('(footprint "R_0805"') == 4
 
 
 @pytest.mark.anyio
