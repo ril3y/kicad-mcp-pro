@@ -1727,6 +1727,54 @@ def _get_symbol_library_dir() -> Path:
     return cfg.symbol_library_dir
 
 
+def _symbol_file(library: str) -> Path:
+    """Resolve a symbol library name to a ``.kicad_sym`` path.
+
+    Project-local ``sym-lib-table`` is consulted before the global library
+    directory so user-imported libraries (e.g. easyeda2kicad's symbol
+    libraries) resolve in headless flows that don't go through eeschema's
+    GUI library resolver. The schematic-side counterpart of PR #9's
+    ``_footprint_file`` fix in ``tools/pcb.py`` — same S-expression
+    format, same ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` substitution,
+    same fall-through-to-global semantics. Without this fix, an attempt
+    to spawn eeschema headlessly on a project that uses easyeda2kicad-
+    imported symbols would either crash on the missing library or block
+    on the GUI's "library not found" modal.
+    """
+    cfg = get_config()
+    if cfg.project_dir is not None:
+        sym_table = cfg.project_dir / "sym-lib-table"
+        if sym_table.exists():
+            try:
+                table_text = sym_table.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                table_text = ""
+            entry_pattern = re.compile(
+                r'\(name\s+"?'
+                + re.escape(library)
+                + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
+                re.IGNORECASE,
+            )
+            match = entry_pattern.search(table_text)
+            if match:
+                uri = match.group(1)
+                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
+                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
+                # ``sym-lib-table`` URIs are usually full paths to a
+                # ``.kicad_sym`` file (not directories like fp-lib-table).
+                # Try the URI itself first, then fall back to URI/library.kicad_sym
+                # for compatibility with directory-style entries.
+                candidate = Path(uri)
+                if candidate.exists() and candidate.suffix == ".kicad_sym":
+                    return candidate
+                candidate = candidate / f"{library}.kicad_sym"
+                if candidate.exists():
+                    return candidate
+    if cfg.symbol_library_dir is None or not cfg.symbol_library_dir.exists():
+        raise FileNotFoundError("No KiCad symbol library directory is configured.")
+    return cfg.symbol_library_dir / f"{library}.kicad_sym"
+
+
 def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
     """Rotate a point around the origin."""
     radians = math.radians(angle_deg)
@@ -1737,7 +1785,7 @@ def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
 
 def load_lib_symbol(library: str, symbol_name: str) -> str | None:
     """Load a symbol definition from a KiCad symbol library."""
-    sym_file = _get_symbol_library_dir() / f"{library}.kicad_sym"
+    sym_file = _symbol_file(library)
     if not sym_file.exists():
         return None
 
@@ -1951,7 +1999,7 @@ def get_pin_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Calculate absolute pin tip positions for a symbol placement."""
-    sym_file = _get_symbol_library_dir() / f"{library}.kicad_sym"
+    sym_file = _symbol_file(library)
     if not sym_file.exists():
         return {}
 
@@ -1993,7 +2041,7 @@ def get_pin_alias_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Return a lookup for pin numbers, names, and normalized aliases."""
-    sym_file = _get_symbol_library_dir() / f"{library}.kicad_sym"
+    sym_file = _symbol_file(library)
     if not sym_file.exists():
         return {}
 
@@ -2038,7 +2086,7 @@ def get_pin_alias_positions(
 
 def get_symbol_available_units(library: str, symbol_name: str) -> set[int]:
     """Return supported symbol units from the KiCad library."""
-    sym_file = _get_symbol_library_dir() / f"{library}.kicad_sym"
+    sym_file = _symbol_file(library)
     if not sym_file.exists():
         return set()
 
@@ -3556,7 +3604,7 @@ def register(mcp: FastMCP) -> None:
         )
 
         units = []
-        sym_file = _get_symbol_library_dir() / f"{library}.kicad_sym"
+        sym_file = _symbol_file(library)
         if sym_file.exists():
             content = sym_file.read_text(encoding="utf-8", errors="ignore")
             symbol_blocks = _collect_symbol_blocks(content, symbol_name)
