@@ -701,7 +701,10 @@ async def test_pcb_sync_from_schematic_adds_missing_footprints(
     assert "Partially net-mapped refs: 0" in result
     assert "Refs with unresolved pad nets: (none)" in result
     assert "(version 20250216)" in pcb_text
-    assert pcb_text.count('(footprint "R_0805"') == 2
+    # Header now uses the prefixed Library:Footprint form (PR #9). The
+    # bare form is what stand-alone .kicad_mod files store; KiCad expects
+    # the prefixed form when the block is embedded in a board.
+    assert pcb_text.count('(footprint "Resistor_SMD:R_0805"') == 2
     assert '(property "Reference" "R1"' in pcb_text
     assert '(property "Reference" "R2"' in pcb_text
     assert '(net "VIN")' in pcb_text
@@ -856,7 +859,8 @@ async def test_pcb_sync_from_schematic_deduplicates_multi_unit_references(
     pcb_text = (sample_project / "demo.kicad_pcb").read_text(encoding="utf-8")
 
     assert "New footprints added: 1" in result
-    assert pcb_text.count('(footprint "R_1206"') == 1
+    # Sync ADDS a R_1206 — header carries the prefixed form (PR #9).
+    assert pcb_text.count('(footprint "Resistor_SMD:R_1206"') == 1
     assert pcb_text.count('(property "Reference" "U1"') == 1
 
 
@@ -919,6 +923,10 @@ async def test_pcb_sync_from_schematic_reports_mismatches_without_replacing(
     assert "Existing footprint mismatches:" in result
     assert "Rerun with replace_mismatched=True" in result
     assert "Mismatched footprints replaced: 0" in result
+    # The pre-existing fixture footprint stayed in its original bare form
+    # because replace_mismatched=False — sync didn't rewrite the header.
+    # The bare form is what the fixture wrote at line ~880; PR #9's
+    # prefixed-form rewrite only applies to footprints sync ADDS.
     assert '(footprint "R_1206"' in pcb_text
     assert '(footprint "R_0805"' not in pcb_text
 
@@ -1162,8 +1170,9 @@ async def test_pcb_sync_from_schematic_replaces_mismatched_footprints_in_place(
     pcb_text = (sample_project / "demo.kicad_pcb").read_text(encoding="utf-8")
 
     assert "Mismatched footprints replaced: 1" in result
-    assert '(footprint "R_0805"' in pcb_text
-    assert '(footprint "R_1206"' not in pcb_text
+    # Header rewritten to prefixed Library:Footprint form (PR #9).
+    assert '(footprint "Resistor_SMD:R_0805"' in pcb_text
+    assert '(footprint "Resistor_SMD:R_1206"' not in pcb_text
     assert re.search(r"\s+\(at 40\.0000 50\.0000 90\)", pcb_text) is not None
 
 
@@ -1213,7 +1222,10 @@ async def test_pcb_sync_from_schematic_avoids_simple_footprint_overlap(
         for match in re.finditer(r"\n\t\t\(at\s+([0-9.\-]+\s+[0-9.\-]+\s+\d+)\)", pcb_text)
     }
 
-    assert pcb_text.count('(footprint "R_0805"') == 2
+    # Header now uses the prefixed Library:Footprint form (PR #9). The
+    # bare form is what stand-alone .kicad_mod files store; KiCad expects
+    # the prefixed form when the block is embedded in a board.
+    assert pcb_text.count('(footprint "Resistor_SMD:R_0805"') == 2
     assert len(positions) >= 2
 
 
@@ -1507,7 +1519,7 @@ async def test_pcb_design_blocks_and_inner_layer_graphics_success(
     assert "was not found" in unknown_place
     assert "Added line inner-layer graphic" in inner
     assert '"In1.Cu"' in layers
-    assert pcb_text.count('(footprint "R_0805"') == 4
+    assert pcb_text.count('(footprint "Resistor_SMD:R_0805"') == 4
 
 
 @pytest.mark.anyio

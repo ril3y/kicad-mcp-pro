@@ -1374,7 +1374,42 @@ def _inner_layer_graphic_block(
 
 
 def _footprint_file(library: str, footprint: str) -> Path:
+    """Resolve a ``Library:Footprint`` reference to a ``.kicad_mod`` path.
+
+    Project-local ``fp-lib-table`` is consulted before the global library
+    directory so user-imported libraries (e.g. easyeda2kicad symbols + the
+    Amphenol footprints they bring) resolve in headless flows that don't go
+    through KiCad's GUI library resolver. KiCad's S-expression
+    ``fp-lib-table`` carries entries of the form
+    ``(lib (name "x") (type "KiCad") (uri "${KIPRJMOD}/foo.pretty") ...)``
+    — we parse the ``name`` / ``uri`` pair, expand the standard project
+    variables (``${KIPRJMOD}`` and ``${KICAD_PROJECT_DIR}``), and probe the
+    candidate ``.kicad_mod`` file. Falls through to the global directory if
+    the table is missing, the entry is absent, or the candidate doesn't
+    exist on disk — preserves the legacy single-source behavior.
+    """
     cfg = get_config()
+    if cfg.project_dir is not None:
+        fp_table = cfg.project_dir / "fp-lib-table"
+        if fp_table.exists():
+            try:
+                table_text = fp_table.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                table_text = ""
+            entry_pattern = re.compile(
+                r'\(name\s+"?'
+                + re.escape(library)
+                + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
+                re.IGNORECASE,
+            )
+            match = entry_pattern.search(table_text)
+            if match:
+                uri = match.group(1)
+                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
+                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
+                candidate = Path(uri) / f"{footprint}.kicad_mod"
+                if candidate.exists():
+                    return candidate
     if cfg.footprint_library_dir is None or not cfg.footprint_library_dir.exists():
         raise FileNotFoundError("No KiCad footprint library directory is configured.")
     return cfg.footprint_library_dir / f"{library}.pretty" / f"{footprint}.kicad_mod"
@@ -1466,6 +1501,19 @@ def _render_board_footprint_block(
     if not path.exists():
         raise FileNotFoundError(f"Footprint '{footprint_assignment}' was not found.")
     block = path.read_text(encoding="utf-8", errors="ignore").strip()
+    # Stand-alone ``.kicad_mod`` files store only the footprint name in the
+    # header; the form embedded inside a ``.kicad_pcb`` is the prefixed
+    # ``Library:Footprint`` token. Without this rewrite, a synced board
+    # carries headers like ``(footprint "CONN-TH_9-6437287-8" ...)`` instead
+    # of ``(footprint "easyeda2kicad:CONN-TH_9-6437287-8" ...)``, which
+    # breaks downstream library-aware tooling and KiCad's "Update Footprint
+    # from Library" flow.
+    block = re.sub(
+        r'\(footprint\s+"[^"]+"',
+        f'(footprint "{library}:{footprint}"',
+        block,
+        count=1,
+    )
     block = _replace_property_value(block, "Reference", reference)
     block = _replace_property_value(block, "Value", value)
     block = _assign_pad_nets(block, pad_nets)
