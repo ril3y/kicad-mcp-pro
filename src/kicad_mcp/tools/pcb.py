@@ -3872,8 +3872,7 @@ def register(mcp: FastMCP) -> None:
             current_board.create_items(zones)
             current_board.refill_zones(block=True, max_poll_seconds=60.0)
         return (
-            f"Added {len(zones)} teardrop helper zone(s) to the active board. "
-            f"{_PERSISTENCE_HINT}"
+            f"Added {len(zones)} teardrop helper zone(s) to the active board. {_PERSISTENCE_HINT}"
         )
 
     # -----------------------------------------------------------------------

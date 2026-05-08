@@ -15,6 +15,7 @@ These tests build a synthetic project with a project-local
 4. Falls through to the global directory when the local table doesn't
    list the library or the candidate file doesn't exist.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -59,11 +60,11 @@ def test_symbol_file_resolves_via_project_local_sym_lib_table_full_path(
     sym_path = project_dir / "easyeda2kicad.kicad_sym"
     sym_path.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "easyeda2kicad") (type "KiCad") '
         '(uri "${KIPRJMOD}/easyeda2kicad.kicad_sym") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
@@ -86,11 +87,11 @@ def test_symbol_file_resolves_via_directory_style_uri(
     sym_path = lib_dir / "vendor.kicad_sym"
     sym_path.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "vendor") (type "KiCad") '
         '(uri "${KIPRJMOD}/vendor") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
@@ -111,11 +112,11 @@ def test_symbol_file_expands_kicad_project_dir_variable(
     sym_path = project_dir / "legacy.kicad_sym"
     sym_path.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "legacy") (type "KiCad") '
         '(uri "${KICAD_PROJECT_DIR}/legacy.kicad_sym") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
@@ -137,11 +138,11 @@ def test_symbol_file_handles_absolute_uri(
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
     (project_dir / "sym-lib-table").write_text(
-        f'(sym_lib_table\n'
+        f"(sym_lib_table\n"
         f'  (lib (name "myimport") (type "KiCad") '
         f'(uri "{abs_lib.as_posix()}") '
         f'(options "") (descr ""))\n'
-        f')\n',
+        f")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
@@ -161,11 +162,11 @@ def test_symbol_file_falls_through_to_global_when_local_misses(
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "OTHER") (type "KiCad") '
         '(uri "${KIPRJMOD}/other.kicad_sym") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     global_dir = tmp_path / "kicad_global"
@@ -188,11 +189,11 @@ def test_symbol_file_falls_through_when_local_candidate_missing(
     project_dir.mkdir()
     # Note: no stale.kicad_sym file inside.
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "stale") (type "KiCad") '
         '(uri "${KIPRJMOD}/stale.kicad_sym") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     global_dir = tmp_path / "kicad_global"
@@ -231,11 +232,11 @@ def test_symbol_file_matches_library_name_case_insensitively(
     sym_path = project_dir / "EasyEda.kicad_sym"
     sym_path.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "EasyEda") (type "KiCad") '
         '(uri "${KIPRJMOD}/EasyEda.kicad_sym") '
         '(options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
@@ -258,14 +259,14 @@ def test_symbol_file_picks_correct_entry_among_multiple_libraries(
     target.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
     decoy.write_text("(WRONG)", encoding="utf-8")
     (project_dir / "sym-lib-table").write_text(
-        '(sym_lib_table\n'
+        "(sym_lib_table\n"
         '  (lib (name "decoy_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/decoy_lib.kicad_sym") (options "") (descr ""))\n'
         '  (lib (name "target_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/target_lib.kicad_sym") (options "") (descr ""))\n'
         '  (lib (name "another_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/another_lib.kicad_sym") (options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
