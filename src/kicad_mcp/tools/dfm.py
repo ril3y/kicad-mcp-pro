@@ -210,6 +210,47 @@ def _format_status(status: str, message: str) -> str:
     return f"- {status}: {message}"
 
 
+def _recommended_design_rules(profile: dict[str, Any]) -> dict[str, float]:
+    """Map a manufacturer DFM profile onto ``pcb_set_design_rules`` arguments.
+
+    The profile JSONs store fab-side minimums (track width, drill, annular
+    ring); the design-rule writer expects board-side argument names. Bridge
+    them so users can apply a manufacturer baseline without having to look
+    up the schema. Derived values:
+
+    - ``min_via_diameter_mm = min_drill_mm + 2 * min_annular_ring_mm``
+      (the smallest annular-ring-clean via the fab will accept).
+    - ``min_hole_to_hole_mm = max(2 * min_drill_mm, 0.25)``
+      (profiles don't store this; 2x drill is a conservative industry
+      default and matches JLCPCB's published spec for standard tier).
+
+    Raises ``ValueError`` if the profile lacks a ``rules`` block — this
+    catches loaders pointing at an auxiliary profile (e.g. the
+    ``jlcpcb_rotations`` BOM-rotation database) that doesn't carry
+    design-rule fields.
+    """
+    if "rules" not in profile:
+        raise ValueError(
+            f"Profile '{profile.get('manufacturer', '?')}/"
+            f"{profile.get('tier', '?')}' has no 'rules' block — it is "
+            "likely a non-design-rule auxiliary profile (e.g. a BOM "
+            "rotation database). Load a profile that includes design "
+            "rules (jlcpcb_standard, jlcpcb_advanced, oshpark_2layer, "
+            "pcbway_standard)."
+        )
+    rules = cast(dict[str, float], profile["rules"])
+    drill = float(rules["min_drill_mm"])
+    annular = float(rules["min_annular_ring_mm"])
+    return {
+        "min_trace_width_mm": float(rules["min_trace_width_mm"]),
+        "min_clearance_mm": float(rules["min_trace_clearance_mm"]),
+        "min_via_drill_mm": drill,
+        "min_via_diameter_mm": drill + 2.0 * annular,
+        "min_annular_ring_mm": annular,
+        "min_hole_to_hole_mm": max(2.0 * drill, 0.25),
+    }
+
+
 def _dfm_check_lines(
     profile: dict[str, Any],
     *,
@@ -398,6 +439,52 @@ def register(mcp: FastMCP) -> None:
         """Run a manufacturer-aware DFM review using the active bundled profile."""
         profile = _selected_profile()
         return "\n".join(_dfm_check_lines(profile))
+
+    @mcp.tool()
+    @headless_compatible
+    def dfm_get_recommended_design_rules(
+        manufacturer: str | None = None,
+        tier: str | None = None,
+    ) -> str:
+        """Show the manufacturer's recommended ``pcb_set_design_rules`` values.
+
+        Reads the active profile (or the explicit ``manufacturer`` / ``tier``
+        if provided) and emits the six float arguments ``pcb_set_design_rules``
+        accepts, derived from the profile's fab minimums. The output is
+        formatted so an LLM client can copy-paste the arg block straight into
+        a ``pcb_set_design_rules`` call without looking up schema.
+        """
+        if manufacturer is not None and tier is not None:
+            profile = _load_profile(manufacturer, tier)
+        elif manufacturer is None and tier is None:
+            profile = _selected_profile()
+        else:
+            raise ValueError(
+                "Pass both 'manufacturer' and 'tier' or neither (to use the "
+                "active profile saved by dfm_load_manufacturer_profile)."
+            )
+
+        rules = _recommended_design_rules(profile)
+        lines = [
+            "Recommended pcb_set_design_rules arguments:",
+            f"- Profile: {profile['manufacturer']} / {profile['tier']}",
+            f"- min_trace_width_mm: {rules['min_trace_width_mm']:.3f}",
+            f"- min_clearance_mm: {rules['min_clearance_mm']:.3f}",
+            f"- min_via_drill_mm: {rules['min_via_drill_mm']:.3f}",
+            f"- min_via_diameter_mm: {rules['min_via_diameter_mm']:.3f}",
+            f"- min_annular_ring_mm: {rules['min_annular_ring_mm']:.3f}",
+            f"- min_hole_to_hole_mm: {rules['min_hole_to_hole_mm']:.3f}",
+            "",
+            "Apply with:",
+            "  pcb_set_design_rules("
+            f"min_trace_width_mm={rules['min_trace_width_mm']:.3f}, "
+            f"min_clearance_mm={rules['min_clearance_mm']:.3f}, "
+            f"min_via_drill_mm={rules['min_via_drill_mm']:.3f}, "
+            f"min_via_diameter_mm={rules['min_via_diameter_mm']:.3f}, "
+            f"min_annular_ring_mm={rules['min_annular_ring_mm']:.3f}, "
+            f"min_hole_to_hole_mm={rules['min_hole_to_hole_mm']:.3f})",
+        ]
+        return "\n".join(lines)
 
     @mcp.tool()
     @headless_compatible

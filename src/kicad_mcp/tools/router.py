@@ -292,6 +292,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
         "tools": [
             "dfm_load_manufacturer_profile",
             "dfm_run_manufacturer_check",
+            "dfm_get_recommended_design_rules",
             "dfm_calculate_manufacturing_cost",
         ],
     },
