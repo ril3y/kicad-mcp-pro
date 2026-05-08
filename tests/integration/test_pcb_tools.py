@@ -388,6 +388,10 @@ async def test_pcb_set_footprint_attributes_sets_dnp_and_bom_flags(
     assert "Updated footprint 'D6'" in result
     assert "do_not_populate=True" in result
     assert "exclude_from_bom=True" in result
+    # PR #10 retro: success string must remind callers to pcb_save() so the
+    # in-memory attribute mutation isn't silently lost on close-without-save.
+    assert "Call pcb_save()" in result
+    assert "in-memory only" in result
     assert attrs.do_not_populate is True
     assert attrs.exclude_from_bill_of_materials is True
     # Untouched flags must NOT change.
@@ -463,6 +467,8 @@ async def test_pcb_set_footprint_attributes_sets_all_four_flags(
     )
 
     assert "Updated footprint 'TP1'" in result
+    # PR #10 retro: persistence hint present on every success path.
+    assert "Call pcb_save()" in result
     assert attrs.do_not_populate is True
     assert attrs.exclude_from_bill_of_materials is True
     assert attrs.exclude_from_position_files is True
