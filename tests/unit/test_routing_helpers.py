@@ -1,4 +1,5 @@
 """Unit tests for low-level routing helpers in kicad_mcp.tools.routing."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

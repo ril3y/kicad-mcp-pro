@@ -6,6 +6,7 @@ single IPC transaction. Same Angle-wrapping semantics as
 + skipped missing references, persistence hint suffix per PR #11
 convention.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

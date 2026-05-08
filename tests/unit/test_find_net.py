@@ -10,6 +10,7 @@ These tests pin the new contract: walk ``board.get_nets()`` and return
 the live ``Net``; raise ``ValueError`` on a typo'd name so the failure
 surfaces immediately.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

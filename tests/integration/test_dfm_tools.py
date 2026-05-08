@@ -228,6 +228,5 @@ async def test_dfm_get_recommended_design_rules_partial_args_rejected(
     )
 
     assert "Pass both" in result, (
-        f"Expected the 'Pass both' guidance in the partial-args error, "
-        f"got: {result!r}"
+        f"Expected the 'Pass both' guidance in the partial-args error, got: {result!r}"
     )

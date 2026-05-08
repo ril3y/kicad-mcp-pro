@@ -11,6 +11,7 @@ These tests use :class:`SimpleNamespace` fakes that intentionally lack a
 than re-implementing the iteration in the test body — a regression that
 re-introduces ``pad.parent`` will fail the suite with ``AttributeError``.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -138,13 +139,19 @@ def test_find_power_anchor_walks_footprints_without_pad_parent(
     from kicad_mcp.tools import signal_integrity as si
 
     fps = [
-        _make_footprint("U7", [
-            _make_pad("1", x_nm=4_000_000, y_nm=8_000_000, net_name="VCC"),
-            _make_pad("2", x_nm=4_080_000, y_nm=8_000_000, net_name="GND"),
-        ]),
-        _make_footprint("C5", [
-            _make_pad("1", x_nm=10_000_000, y_nm=10_000_000, net_name="VCC"),
-        ]),
+        _make_footprint(
+            "U7",
+            [
+                _make_pad("1", x_nm=4_000_000, y_nm=8_000_000, net_name="VCC"),
+                _make_pad("2", x_nm=4_080_000, y_nm=8_000_000, net_name="GND"),
+            ],
+        ),
+        _make_footprint(
+            "C5",
+            [
+                _make_pad("1", x_nm=10_000_000, y_nm=10_000_000, net_name="VCC"),
+            ],
+        ),
     ]
     monkeypatch.setattr(si, "_board_footprints", lambda: fps)
 

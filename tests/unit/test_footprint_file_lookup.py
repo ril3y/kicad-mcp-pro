@@ -18,6 +18,7 @@ These tests build a synthetic project with a project-local
 4. ``_render_board_footprint_block`` rewrites the footprint header to the
    ``Library:Footprint`` form expected inside ``.kicad_pcb`` files.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -47,9 +48,7 @@ def _build_project_with_local_lib(
     project_dir.mkdir()
     pretty_dir = project_dir / f"{library_name}.pretty"
     pretty_dir.mkdir()
-    (pretty_dir / f"{footprint_name}.kicad_mod").write_text(
-        _FAKE_KICAD_MOD, encoding="utf-8"
-    )
+    (pretty_dir / f"{footprint_name}.kicad_mod").write_text(_FAKE_KICAD_MOD, encoding="utf-8")
     fp_table = project_dir / "fp-lib-table"
     # Use ``.replace`` rather than ``.format`` so ``${KIPRJMOD}`` etc. don't
     # collide with str.format's ``{...}`` syntax. The template uses ``<LIB>``
@@ -195,9 +194,7 @@ def test_footprint_file_falls_through_when_local_candidate_missing(
     )
     global_dir = tmp_path / "kicad_global"
     (global_dir / "stale.pretty").mkdir(parents=True)
-    (global_dir / "stale.pretty" / "GHOST.kicad_mod").write_text(
-        _FAKE_KICAD_MOD, encoding="utf-8"
-    )
+    (global_dir / "stale.pretty" / "GHOST.kicad_mod").write_text(_FAKE_KICAD_MOD, encoding="utf-8")
     _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=global_dir)
 
     resolved = _footprint_file("stale", "GHOST")
@@ -265,14 +262,14 @@ def test_footprint_file_picks_correct_entry_among_multiple_libraries(
         '(footprint "WRONG-FOOTPRINT")', encoding="utf-8"
     )
     (project_dir / "fp-lib-table").write_text(
-        '(fp_lib_table\n'
+        "(fp_lib_table\n"
         '  (lib (name "decoy_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/decoy_lib.pretty") (options "") (descr ""))\n'
         '  (lib (name "target_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/target_lib.pretty") (options "") (descr ""))\n'
         '  (lib (name "another_lib") (type "KiCad") '
         '(uri "${KIPRJMOD}/another_lib.pretty") (options "") (descr ""))\n'
-        ')\n',
+        ")\n",
         encoding="utf-8",
     )
     _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)

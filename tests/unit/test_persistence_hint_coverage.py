@@ -54,11 +54,7 @@ _IPC_MUTATING_TOOLS = [
 
 def _pcb_module_text() -> str:
     src_path = (
-        Path(__file__).resolve().parent.parent.parent
-        / "src"
-        / "kicad_mcp"
-        / "tools"
-        / "pcb.py"
+        Path(__file__).resolve().parent.parent.parent / "src" / "kicad_mcp" / "tools" / "pcb.py"
     )
     return src_path.read_text(encoding="utf-8")
 
@@ -91,10 +87,7 @@ def test_persistence_hint_constant_is_defined() -> None:
     crossing tool-package boundaries — see PR #11's E-audit fix.
     """
     src = (
-        Path(__file__).resolve().parent.parent.parent
-        / "src"
-        / "kicad_mcp"
-        / "connection.py"
+        Path(__file__).resolve().parent.parent.parent / "src" / "kicad_mcp" / "connection.py"
     ).read_text(encoding="utf-8")
     assert re.search(r"^PERSISTENCE_HINT\s*=", src, re.MULTILINE), (
         "PERSISTENCE_HINT module-level constant is missing from connection.py"
@@ -105,10 +98,7 @@ def test_persistence_hint_value_matches_import() -> None:
     """The text in ``connection.py`` must equal what's imported at runtime.
     Catches a refactor that splits the constant into two divergent strings."""
     src = (
-        Path(__file__).resolve().parent.parent.parent
-        / "src"
-        / "kicad_mcp"
-        / "connection.py"
+        Path(__file__).resolve().parent.parent.parent / "src" / "kicad_mcp" / "connection.py"
     ).read_text(encoding="utf-8")
     match = re.search(
         r'PERSISTENCE_HINT\s*=\s*\(\s*"([^"]+)"\s*\n\s*"([^"]+)"\s*\)',
@@ -165,22 +155,16 @@ _SIBLING_MODULE_TOOLS: list[tuple[str, list[str]]] = [
 
 
 def _module_text(rel_path: str) -> str:
-    return (
-        Path(__file__).resolve().parent.parent.parent / "src" / rel_path
-    ).read_text(encoding="utf-8")
+    return (Path(__file__).resolve().parent.parent.parent / "src" / rel_path).read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize(
     ("rel_path", "tool_name"),
-    [
-        (rel_path, tool)
-        for rel_path, tools in _SIBLING_MODULE_TOOLS
-        for tool in tools
-    ],
+    [(rel_path, tool) for rel_path, tools in _SIBLING_MODULE_TOOLS for tool in tools],
 )
-def test_sibling_module_ipc_mutator_uses_persistence_hint(
-    rel_path: str, tool_name: str
-) -> None:
+def test_sibling_module_ipc_mutator_uses_persistence_hint(rel_path: str, tool_name: str) -> None:
     """Cross-module sweep guard. ``routing.py`` and ``power_integrity.py``
     each have IPC mutators that must carry the hint just like the
     ``pcb.py`` set, since they share the same data-loss class. Catches
@@ -201,7 +185,8 @@ def test_no_unexpected_orphaned_persistence_hint_uses() -> None:
     source."""
     src = _pcb_module_text()
     references = [
-        line for line in src.splitlines()
+        line
+        for line in src.splitlines()
         if "_PERSISTENCE_HINT" in line
         and not re.match(r"^_PERSISTENCE_HINT\s*=", line)
         and not line.strip().startswith("#")
@@ -217,6 +202,5 @@ def test_no_unexpected_orphaned_persistence_hint_uses() -> None:
         f"({len(_IPC_MUTATING_TOOLS)} MCP tools + "
         f"{len(_NON_TOOL_HINT_USERS)} module helpers), found "
         f"{len(references)}. If a new tool was added, update "
-        "_IPC_MUTATING_TOOLS or _NON_TOOL_HINT_USERS. Lines:\n"
-        + "\n".join(references)
+        "_IPC_MUTATING_TOOLS or _NON_TOOL_HINT_USERS. Lines:\n" + "\n".join(references)
     )

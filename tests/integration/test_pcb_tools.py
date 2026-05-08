@@ -166,9 +166,7 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
     class _OrientationFootprint:
         # No ``angle`` attribute — forces the elif-orientation branch.
         def __init__(self) -> None:
-            self.reference_field = SimpleNamespace(
-                text=SimpleNamespace(value="R1")
-            )
+            self.reference_field = SimpleNamespace(text=SimpleNamespace(value="R1"))
             self.position = None
             self._orientation = None
 
@@ -198,8 +196,7 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
     assert "Call pcb_save() to persist" in result
     # The rotation MUST have been applied — silent drop is the bug.
     assert footprint.orientation is not None, (
-        "rotation_deg was silently dropped — orientation setter never received "
-        "an Angle instance"
+        "rotation_deg was silently dropped — orientation setter never received an Angle instance"
     )
     assert footprint.orientation.degrees == pytest.approx(90.0)
     mock_board.update_items.assert_called_once()
@@ -221,9 +218,7 @@ async def test_pcb_move_footprint_propagates_non_kipy_setter_errors(
 
     class _RuntimeErrorOrientationFootprint:
         def __init__(self) -> None:
-            self.reference_field = SimpleNamespace(
-                text=SimpleNamespace(value="R1")
-            )
+            self.reference_field = SimpleNamespace(text=SimpleNamespace(value="R1"))
             self.position = None
 
         @property
@@ -268,9 +263,7 @@ async def test_pcb_move_footprint_propagates_non_kipy_angle_setter_errors(
     class _RuntimeErrorAngleFootprint:
         # Has ``angle`` (not ``orientation``) — forces the if-angle branch.
         def __init__(self) -> None:
-            self.reference_field = SimpleNamespace(
-                text=SimpleNamespace(value="R1")
-            )
+            self.reference_field = SimpleNamespace(text=SimpleNamespace(value="R1"))
             self.position = None
 
         @property

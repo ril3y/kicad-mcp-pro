@@ -2737,9 +2737,7 @@ def register(mcp: FastMCP) -> None:
                         error=str(exc),
                     )
             updated.append(cast(BoardItem, footprint))
-            applied.append(
-                f"{item.reference} → ({item.x_mm}, {item.y_mm}) rot={item.rotation_deg}"
-            )
+            applied.append(f"{item.reference} → ({item.x_mm}, {item.y_mm}) rot={item.rotation_deg}")
 
         if updated:
             with board_transaction() as board:
@@ -2749,10 +2747,7 @@ def register(mcp: FastMCP) -> None:
         for entry in applied:
             lines.append(f"  - {entry}")
         if missing:
-            lines.append(
-                f"Skipped {len(missing)} missing reference(s): "
-                f"{', '.join(missing)}"
-            )
+            lines.append(f"Skipped {len(missing)} missing reference(s): {', '.join(missing)}")
         lines.append(_PERSISTENCE_HINT)
         return "\n".join(lines)
 
@@ -3944,8 +3939,7 @@ def register(mcp: FastMCP) -> None:
             current_board.create_items(zones)
             current_board.refill_zones(block=True, max_poll_seconds=60.0)
         return (
-            f"Added {len(zones)} teardrop helper zone(s) to the active board. "
-            f"{_PERSISTENCE_HINT}"
+            f"Added {len(zones)} teardrop helper zone(s) to the active board. {_PERSISTENCE_HINT}"
         )
 
     # -----------------------------------------------------------------------
