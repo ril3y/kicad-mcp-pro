@@ -126,6 +126,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_highlight_net",
             "pcb_set_net_class",
             "pcb_move_footprint",
+            "pcb_apply_placement_spec",
             "pcb_set_footprint_layer",
             "pcb_set_footprint_attributes",
             "pcb_sync_from_schematic",

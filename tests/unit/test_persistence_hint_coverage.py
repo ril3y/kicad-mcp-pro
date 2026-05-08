@@ -43,6 +43,7 @@ _IPC_MUTATING_TOOLS = [
     "pcb_add_text",
     "pcb_delete_items",
     "pcb_move_footprint",
+    "pcb_apply_placement_spec",
     "pcb_set_footprint_layer",
     "pcb_set_footprint_attributes",
     "pcb_add_zone",
