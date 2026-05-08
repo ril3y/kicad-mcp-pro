@@ -12,7 +12,7 @@ from kipy.proto.board.board_types_pb2 import BoardLayer
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
-from ..connection import board_transaction, get_board
+from ..connection import PERSISTENCE_HINT, board_transaction, get_board
 from ..models.common import _FootprintLike
 from ..models.power_integrity import (
     CopperWeightCheckInput,
@@ -441,7 +441,7 @@ def register(mcp: FastMCP) -> None:
 
         return (
             f"Generated a copper plane for '{payload.net_name}' on {payload.layer} "
-            f"with {payload.clearance_mm:.3f} mm clearance."
+            f"with {payload.clearance_mm:.3f} mm clearance. {PERSISTENCE_HINT}"
         )
 
     @mcp.tool()

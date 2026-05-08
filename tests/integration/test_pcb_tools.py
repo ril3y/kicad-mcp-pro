@@ -193,6 +193,9 @@ async def test_pcb_move_footprint_applies_rotation_via_orientation_setter(
     )
 
     assert "Moved footprint 'R1'" in result
+    # PR #11 sweep: every IPC mutator's success string must carry the
+    # persistence hint so agents know to follow up with pcb_save().
+    assert "Call pcb_save() to persist" in result
     # The rotation MUST have been applied — silent drop is the bug.
     assert footprint.orientation is not None, (
         "rotation_deg was silently dropped — orientation setter never received "
@@ -1541,6 +1544,7 @@ async def test_pcb_set_keepout_zone_creates_rule_area(mock_board) -> None:
 
     [[zone]] = mock_board.create_items.call_args.args
     assert "Added keepout zone" in result
+    assert "Call pcb_save() to persist" in result  # PR #11 sweep
     assert zone.proto.rule_area_settings.keepout_tracks is True
     assert zone.proto.rule_area_settings.keepout_vias is True
     assert zone.proto.rule_area_settings.keepout_copper is True
@@ -1571,6 +1575,7 @@ async def test_pcb_add_zone_creates_copper_zone(mock_board) -> None:
 
     [[zone]] = mock_board.create_items.call_args.args
     assert "Added copper zone 'GND_DIG_SPLIT'" in result
+    assert "Call pcb_save() to persist" in result  # PR #11 sweep
     assert list(zone.layers) == [BoardLayer.BL_B_Cu]
     assert zone.net.name == "GND_DIG"
     assert zone.priority == 2
@@ -1609,6 +1614,7 @@ async def test_pcb_add_teardrops_creates_helper_zones(mock_board) -> None:
 
     [zones] = mock_board.create_items.call_args.args
     assert "Added 1 teardrop helper zone(s)" in result
+    assert "Call pcb_save() to persist" in result  # PR #11 sweep
     assert len(zones) == 1
     mock_board.refill_zones.assert_called_once()
 
@@ -1752,12 +1758,14 @@ async def test_pcb_add_blind_and_micro_via_configure_layer_pairs(mock_board) -> 
     micro_via = mock_board.create_items.call_args_list[1].args[0][0]
 
     assert "Blind or buried via added successfully" in blind
+    assert "Call pcb_save() to persist" in blind  # PR #11 sweep
     assert blind_via.type == ViaType.VT_BLIND_BURIED
     assert list(blind_via.padstack.layers) == [BoardLayer.BL_F_Cu, BoardLayer.BL_In1_Cu]
     assert blind_via.padstack.drill.start_layer == BoardLayer.BL_F_Cu
     assert blind_via.padstack.drill.end_layer == BoardLayer.BL_In1_Cu
 
     assert "Microvia added successfully" in micro
+    assert "Call pcb_save() to persist" in micro  # PR #11 sweep
     assert micro_via.type == ViaType.VT_MICRO
     assert list(micro_via.padstack.layers) == [BoardLayer.BL_In1_Cu, BoardLayer.BL_In2_Cu]
     assert micro_via.padstack.drill.start_layer == BoardLayer.BL_In1_Cu

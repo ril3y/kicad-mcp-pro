@@ -109,3 +109,19 @@ def board_transaction() -> Generator[Board, None, None]:
         except KiCadConnectionError:
             reset_connection()
             raise
+
+
+# Suffix appended to every success response from a tool that mutates pcbnew's
+# in-memory board over IPC (``board.update_items`` / ``create_items`` /
+# ``remove_items_by_id`` / ``refill_zones``). These tools never write to the
+# ``.kicad_pcb`` file themselves; the change lives only in pcbnew's session
+# until ``pcb_save()`` flushes it. KiCad's autosave timer writes
+# ``_autosave-*.kicad_pcb`` siblings, not the canonical file, so close-without-
+# save silently loses the edit. Lives in ``connection.py`` (alongside
+# ``board_transaction``) so every IPC-mutating module can import it without
+# crossing tool-package boundaries — see ``tools/pcb.py``, ``tools/routing.py``,
+# ``tools/power_integrity.py``.
+PERSISTENCE_HINT = (
+    "Call pcb_save() to persist — the change is in-memory only and "
+    "will be lost if pcbnew closes without saving."
+)
