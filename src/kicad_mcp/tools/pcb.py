@@ -2700,6 +2700,16 @@ def register(mcp: FastMCP) -> None:
         or omit (the default) to leave that flag untouched. Useful for marking
         DNP parts (e.g. an unpopulated TVS that's still on the BOM for v2),
         or excluding test points from pick-and-place output.
+
+        IMPORTANT: this tool mutates the in-memory board held by pcbnew. The
+        change is NOT persisted to the ``.kicad_pcb`` file until ``pcb_save``
+        runs. KiCad's autosave timer writes to ``_autosave-*.kicad_pcb``
+        siblings, not the canonical file, so closing pcbnew without an
+        explicit save silently loses the flags. Always follow this tool with
+        ``pcb_save()`` when the change must survive a close-without-save.
+        ``not_in_schematic`` is NOT a substitute for
+        ``exclude_from_position_files`` — the next ``pcb_sync_from_schematic``
+        run will treat ``not_in_schematic=True`` footprints as orphans.
         """
         footprint = _find_footprint_by_reference(reference)
         if footprint is None:
@@ -2730,7 +2740,11 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as board:
             board.update_items([cast(BoardItem, footprint)])
 
-        return f"Updated footprint '{reference}': {', '.join(changes)}."
+        return (
+            f"Updated footprint '{reference}': {', '.join(changes)}. "
+            "Call pcb_save() to persist — the change is in-memory only "
+            "and will be lost if pcbnew closes without saving."
+        )
 
     @mcp.tool()
     @headless_compatible
