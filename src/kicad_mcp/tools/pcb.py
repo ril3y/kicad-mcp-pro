@@ -39,7 +39,7 @@ from ..connection import (
     board_transaction,
     get_board,
 )
-from ..models.common import _FootprintLike, _PadLike
+from ..models.common import _FootprintAttributesLike, _FootprintLike, _PadLike
 from ..models.pcb import (
     AddCircleInput,
     AddFiducialMarksInput,
@@ -2726,7 +2726,7 @@ def register(mcp: FastMCP) -> None:
         if footprint is None:
             return f"Footprint '{reference}' was not found on the active board."
 
-        attrs = footprint.attributes
+        attrs = cast(_FootprintAttributesLike, footprint.attributes)
         changes: list[str] = []
         if do_not_populate is not None:
             attrs.do_not_populate = do_not_populate
