@@ -14,6 +14,13 @@ async def test_route_autoroute_freerouting_smoke_handles_large_dsn(
     sample_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Pin to a v1 image so the v2-detection guard doesn't refuse the run.
+    # Real users with the default v2 config will see a clear error pointing
+    # at this same env var as a workaround.
+    monkeypatch.setenv(
+        "KICAD_MCP_FREEROUTING_IMAGE",
+        "ghcr.io/freerouting/freerouting:1.9.0",
+    )
     nets = "\n".join(f"  (net NET{i})" for i in range(60))
     (sample_project / "demo.dsn").write_text(f"(pcb\n{nets}\n)\n", encoding="utf-8")
 

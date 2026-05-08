@@ -10,5 +10,5 @@
 4. Place footprints and route.
    Use `pcb_auto_place_force_directed()` for a headless spring-layout pass when you want a deterministic starting point before manual polish. The tool now supports `keepout_regions`, `grid_mm`, and a `max_seconds` budget so automated placement stays bounded and respects reserved regions.
    Review `pcb_score_placement()` after placement; it now reports critical-net Manhattan proxy length and thermal-hotspot proximity in addition to the existing intent-aware checks.
-   For external autorouting, stage DSN/SES with `route_export_dsn()`, `route_autoroute_freerouting()`, and `route_import_ses()`. FreeRouting runs Docker-first when available using the pinned `ghcr.io/freerouting/freerouting:2.1.0` image, falls back to a configured JAR, and reports routed percentage, pass count, wall time, and stdout tail.
+   For external autorouting, stage DSN/SES with `route_export_dsn()`, `route_autoroute_freerouting()`, and `route_import_ses()`. FreeRouting runs Docker-first when available using the pinned `ghcr.io/freerouting/freerouting:1.9.0` image (v1 CLI runner; v2.x ships an HTTP server entrypoint that the integration does not yet drive), falls back to a configured JAR, and reports routed percentage, pass count, wall time, and stdout tail.
 5. Validate and export.

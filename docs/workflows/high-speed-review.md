@@ -59,8 +59,9 @@ can catch long high-speed detours and clustered hot parts before routing starts.
 ## 5. Route and Inspect FreeRouting Telemetry
 
 When a DSN is available, `route_autoroute_freerouting` prefers Docker with the
-pinned `ghcr.io/freerouting/freerouting:2.1.0` image and falls back to the JAR
-runner. The result includes routed percentage, total nets, unrouted nets, pass
+pinned `ghcr.io/freerouting/freerouting:1.9.0` image (v1 CLI runner — v2.x
+ships an HTTP server entrypoint the integration does not yet drive) and falls
+back to the JAR runner. The result includes routed percentage, total nets, unrouted nets, pass
 count, wall time, SES path, and the last 4 KB of router output.
 
 ```text
