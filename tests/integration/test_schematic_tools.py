@@ -20,7 +20,7 @@ async def test_schematic_add_label(sample_project, mock_kicad) -> None:
         "sch_add_label",
         {"name": "NET_A", "x_mm": 10.0, "y_mm": 10.0, "rotation": 0},
     )
-    assert "updated" in text.lower() or "reload" in text.lower()
+    assert any(token in text.lower() for token in ("updated", "reload", "saved", "refreshed"))
     labels = await call_tool_text(server, "sch_get_labels", {})
     assert "NET_A" in labels
 
@@ -86,11 +86,12 @@ async def test_schematic_misc_file_tools_cover_buses_labels_jumper_and_project_f
     schematic = (sample_project / "demo.kicad_sch").read_text(encoding="utf-8")
     project_payload = (sample_project / "demo.kicad_pro").read_text(encoding="utf-8")
 
-    assert "updated" in bus.lower()
-    assert "updated" in entry.lower()
-    assert "updated" in no_connect.lower()
-    assert "updated" in global_label.lower()
-    assert "updated" in hierarchical.lower()
+    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")
+    assert any(t in bus.lower() for t in _PERSISTENCE_TOKENS)
+    assert any(t in entry.lower() for t in _PERSISTENCE_TOKENS)
+    assert any(t in no_connect.lower() for t in _PERSISTENCE_TOKENS)
+    assert any(t in global_label.lower() for t in _PERSISTENCE_TOKENS)
+    assert any(t in hierarchical.lower() for t in _PERSISTENCE_TOKENS)
     assert "Added jumper" in jumper
     assert "Hop-over display set to enabled" in hop
     assert "(bus" in schematic
@@ -118,7 +119,7 @@ async def test_power_symbol_reference_is_hidden_and_value_offset(
     )
 
     schematic = (sample_project / "demo.kicad_sch").read_text(encoding="utf-8")
-    assert "updated" in result.lower() or "reload" in result.lower()
+    assert any(t in result.lower() for t in ("updated", "reload", "saved", "refreshed"))
     assert "Grid snap" in result
     assert '(property "Reference" "#PWR' in schematic
     assert "\t\t\t(at 20.32 36.83 0)" in schematic
@@ -266,7 +267,7 @@ async def test_schematic_end_to_end_editing_and_analysis_tools(
     assert "was not found" in missing_wire
     assert "Deleted 1 symbol block(s)" in deleted_symbol
     assert "Reference 'R404' was not found" in missing_symbol
-    assert "updated" in reload_result.lower() or "reload" in reload_result.lower()
+    assert any(t in reload_result.lower() for t in ("updated", "reload", "saved", "refreshed"))
 
 
 @pytest.mark.anyio

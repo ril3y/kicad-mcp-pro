@@ -495,7 +495,10 @@ async def test_schematic_surface(sample_project: Path, mock_kicad) -> None:
         call_tool_text(server, "sch_add_no_connect", {"x_mm": 25.0, "y_mm": 25.0}),
     )
 
-    assert any("updated" in result.lower() or "reload" in result.lower() for result in results)
+    assert any(
+        any(t in result.lower() for t in ("updated", "reload", "saved", "refreshed"))
+        for result in results
+    )
 
     assigned = await call_tool_text(
         server,
@@ -554,8 +557,9 @@ async def test_schematic_surface(sample_project: Path, mock_kicad) -> None:
     assert "Pin A" not in pins
     assert "power flags" in power.lower()
     assert "Annotated" in annotated
-    assert "reload" in built.lower() or "updated" in built.lower()
-    assert "reload" in reload_text.lower() or "updated" in reload_text.lower()
+    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")
+    assert any(t in built.lower() for t in _PERSISTENCE_TOKENS)
+    assert any(t in reload_text.lower() for t in _PERSISTENCE_TOKENS)
     assert '(symbol "power:GND"' in sch_text
     assert '(symbol "GND_0_1"' in sch_text
     assert "power:GND_0_1" not in sch_text

@@ -3205,11 +3205,56 @@ def _symbol_connection_points(parsed: dict[str, Any]) -> set[tuple[float, float]
     return points
 
 
+def _pick_matching_schematic_document(
+    documents: list[Any],
+    configured_sch_file: Path | None,
+) -> tuple[Any | None, int]:
+    """Pick the open schematic document that matches our configured project.
+
+    Returns ``(doc, index)`` where ``doc`` is the matching ``DocumentSpecifier``
+    and ``index`` is its position in ``documents``. ``doc`` is ``None`` when
+    nothing matched. Match heuristic: ``DocumentSpecifier.project.name`` is
+    the project stem (no ``.kicad_pro`` extension); the configured schematic
+    lives at ``<project_dir>/<project_name>.kicad_sch``. Falls back to
+    ``documents[0]`` when no configured path is available so we keep the
+    pre-multi-project behavior for backward compatibility.
+    """
+    if not documents:
+        return None, -1
+    if configured_sch_file is None:
+        return documents[0], 0
+    target_project_stem = configured_sch_file.stem
+    target_project_dir = str(configured_sch_file.parent.resolve()).casefold()
+    for index, doc in enumerate(documents):
+        proj = getattr(doc, "project", None)
+        if proj is None:
+            continue
+        proj_name = getattr(proj, "name", "") or ""
+        proj_path = getattr(proj, "path", "") or ""
+        if proj_name != target_project_stem:
+            continue
+        # path comparison is best-effort; KiCad returns native-style paths
+        # which we casefold for Windows insensitivity.
+        if proj_path and str(Path(proj_path).resolve()).casefold() != target_project_dir:
+            continue
+        return doc, index
+    # No match — refuse to revert someone else's schematic rather than
+    # blindly using documents[0]; the audit found this was unsafe in
+    # multi-project sessions.
+    return None, -1
+
+
 def _reload_schematic_via_ipc() -> str:
     """Persist confirmation + best-effort live KiCad UI refresh.
 
     All return strings mean the .kicad_sch file is already written. They
     differ only in whether KiCad's open schematic editor was refreshed.
+
+    NOTE: a successful refresh sends ``RevertDocument`` to eeschema, which
+    discards any unsaved in-memory edits and clears the editor's undo
+    history. This is acceptable for agent-driven workflows where the agent
+    owns the file, but callers should be aware before exposing this in an
+    interactive context.
     """
     SAVED_NO_KICAD = (
         "Saved. KiCad isn't running for a live refresh — "
@@ -3219,14 +3264,26 @@ def _reload_schematic_via_ipc() -> str:
     SAVED_REFRESH_FAILED = (
         "Saved. Live refresh request failed; reload manually in KiCad."
     )
+    SAVED_IPC_CLIENT_MISSING = (
+        "Saved. KiCad IPC client (kipy) is unavailable — "
+        "the file is on disk but live refresh is impossible until kipy is installed."
+    )
 
     try:
         from google.protobuf.empty_pb2 import Empty  # type: ignore[import-untyped]
         from kipy.proto.common.commands import editor_commands_pb2
         from kipy.proto.common.types.base_types_pb2 import DocumentType
     except Exception as exc:
-        logger.debug("schematic_reload_import_unavailable", error=str(exc))
-        return SAVED_NO_KICAD
+        # kipy / google.protobuf missing is a deployment problem (broken
+        # venv, version skew, kipy not installed) — NOT a runtime KiCad
+        # state. Send the user to fix the install rather than relaunch
+        # KiCad, and raise the log level so it shows up in routine logs.
+        logger.warning(
+            "schematic_reload_import_unavailable",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return SAVED_IPC_CLIENT_MISSING
 
     try:
         kicad = get_kicad()
@@ -3238,13 +3295,28 @@ def _reload_schematic_via_ipc() -> str:
         documents = kicad.get_open_documents(DocumentType.DOCTYPE_SCHEMATIC)
         if not documents:
             return SAVED_NO_DOC
+        configured = get_config().sch_file
+        match_doc, _ = _pick_matching_schematic_document(list(documents), configured)
+        if match_doc is None:
+            # An open schematic exists, but none of them are the project
+            # the MCP is configured for. Refusing the revert prevents us
+            # from clobbering an unrelated project's editor state.
+            logger.debug(
+                "schematic_reload_no_matching_doc",
+                configured=str(configured) if configured else None,
+                open_count=len(list(documents)),
+            )
+            return SAVED_NO_DOC
         command = editor_commands_pb2.RevertDocument()
-        command.document.CopyFrom(documents[0])
-        # kipy's send() expects ``Empty`` for fire-and-forget commands like
-        # RevertDocument — see kipy/board.py::Board.revert on the PCB
-        # side. Earlier we passed ``NoneType`` here which silently failed
-        # inside kipy's protobuf deserialization, so eeschema never saw the
-        # request. (kicad._client.send because mypy's KiCad stub omits send.)
+        command.document.CopyFrom(match_doc)
+        # kipy has no high-level schematic wrapper symmetric to
+        # ``Board.revert`` (which does this same RevertDocument dance for
+        # the PCB side via ``self._kicad.send(command, Empty)`` — see
+        # kipy/board.py::Board.revert, line ~301). So we reach into the
+        # same ``KiCadClient`` instance via ``kicad._client.send``. The
+        # response type MUST be ``Empty``; an earlier version passed
+        # ``NoneType``, which silently failed inside kipy's protobuf
+        # deserialization and eeschema never saw the request.
         kicad._client.send(command, Empty)
     except Exception as exc:
         logger.warning(
