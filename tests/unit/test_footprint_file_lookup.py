@@ -324,20 +324,22 @@ def test_footprint_file_expands_user_env_var_from_kicad_common(
     assert resolved == pretty_dir / "CONN-TH_9-6437287-8.kicad_mod"
 
 
-def test_footprint_file_user_env_var_takes_precedence_over_os_env(
+def test_footprint_file_os_env_takes_precedence_over_kicad_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """KiCad's ``Configure Paths`` is the source of truth — when both the
-    OS environment and ``kicad_common.json`` define the same var with
-    different values, the KiCad config wins. This matches what the GUI
-    does at runtime (KiCad doesn't read PROCESS env for these names)."""
+    """OS env wins over ``kicad_common.json`` — matches KiCad GUI
+    precedence (see ``env_paths.h``: process environment is checked
+    before the config-file mapping). This lets a CI runner that exports
+    ``EASYEDA2KICAD`` in shell override whatever the developer's
+    `Preferences > Configure Paths` happens to have, without modifying
+    config files."""
     from kicad_mcp.tools.pcb import _footprint_file
 
-    libroot_kicad = tmp_path / "from_kicad_config"
-    libroot_kicad.mkdir()
-    (libroot_kicad / "easyeda2kicad.pretty").mkdir()
-    (libroot_kicad / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
+    libroot_os = tmp_path / "from_os_env"
+    libroot_os.mkdir()
+    (libroot_os / "easyeda2kicad.pretty").mkdir()
+    (libroot_os / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
         _FAKE_KICAD_MOD, encoding="utf-8"
     )
 
@@ -350,15 +352,55 @@ def test_footprint_file_user_env_var_takes_precedence_over_os_env(
     )
     _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
 
-    # OS env points at a wrong/empty place; KiCad config wins via the loader.
-    monkeypatch.setenv("EASYEDA2KICAD", str(tmp_path / "from_os_env_should_lose"))
+    # OS env wins; kicad_common.json is the fallback for when the shell
+    # doesn't define the var. We point them at different directories so
+    # only the OS-env path actually contains the .kicad_mod file.
+    monkeypatch.setenv("EASYEDA2KICAD", str(libroot_os))
     monkeypatch.setattr(
         "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
-        lambda: {"EASYEDA2KICAD": str(libroot_kicad)},
+        lambda: {"EASYEDA2KICAD": str(tmp_path / "from_kicad_config_should_lose")},
     )
 
     resolved = _footprint_file("easyeda2kicad", "PART")
-    assert resolved == libroot_kicad / "easyeda2kicad.pretty" / "PART.kicad_mod"
+    assert resolved == libroot_os / "easyeda2kicad.pretty" / "PART.kicad_mod"
+
+
+def test_footprint_file_kicad_config_used_when_os_env_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the shell doesn't export the var, ``kicad_common.json`` is
+    consulted. This is the normal developer-machine path: KiCad's
+    GUI-managed `Configure Paths` mapping is the canonical source when
+    no OS env override is present."""
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    libroot = tmp_path / "from_kicad_config"
+    libroot.mkdir()
+    (libroot / "easyeda2kicad.pretty").mkdir()
+    (libroot / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
+        _FAKE_KICAD_MOD, encoding="utf-8"
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # Make sure the var is unset on the process side so the config-file
+    # path is the only available source.
+    monkeypatch.delenv("EASYEDA2KICAD", raising=False)
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(libroot)},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "PART")
+    assert resolved == libroot / "easyeda2kicad.pretty" / "PART.kicad_mod"
 
 
 def test_find_kicad_user_env_vars_reads_environment_vars_from_kicad_common(
@@ -391,11 +433,12 @@ def test_find_kicad_user_env_vars_reads_environment_vars_from_kicad_common(
         encoding="utf-8",
     )
 
-    # Patch _kicad_config_dirs to return our fake dir.
+    # Patch _kicad_config_dirs to return our fake dir + clear lru_cache.
     monkeypatch.setattr(
         "kicad_mcp.discovery._kicad_config_dirs",
         lambda: [fake_config_dir],
     )
+    find_kicad_user_env_vars.cache_clear()
 
     env = find_kicad_user_env_vars()
     assert env == {
@@ -420,6 +463,7 @@ def test_find_kicad_user_env_vars_returns_empty_when_no_config_present(
         "kicad_mcp.discovery._kicad_config_dirs",
         lambda: [empty_dir],
     )
+    find_kicad_user_env_vars.cache_clear()
 
     assert find_kicad_user_env_vars() == {}
 

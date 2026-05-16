@@ -163,8 +163,12 @@ _register_many(
         "pcb_diff_from_netlist",
     ],
     profiles=_PCB_PROFILES,
-    tier=AccessTier.READ,
+    # WRITE tier because the same tool mutates the .kicad_pcb when
+    # called with apply=True. Registering as READ would leak write
+    # capability into analysis/critic profiles that gate on tier.
+    tier=AccessTier.WRITE,
     runtime=RuntimeRequirement.KICAD_CLI,
+    supports_dry_run=True,
     verification_level="verified",
 )
 

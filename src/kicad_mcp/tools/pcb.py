@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
 import uuid
@@ -1456,19 +1457,32 @@ def _inner_layer_graphic_block(
 def _expand_kicad_lib_uri(uri: str, project_dir: Path | None) -> str:
     """Expand KiCad-style ``${VAR}`` placeholders in an ``fp-lib-table`` URI.
 
-    Substitutes:
-      - ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> project_dir
-      - user-defined vars from ``kicad_common.json::environment.vars``
-        (e.g. ``${EASYEDA2KICAD}``, ``${MY_LIBS}``). KiCad itself only
-        injects these when the GUI is running; the MCP server process
-        does not inherit them, so we read them out of the config file.
+    Substitutes, in order of decreasing precedence (KiCad GUI behavior):
+      1. ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> project_dir
+      2. Process environment (``os.environ``) — matches what the GUI
+         does when its own runtime sees an overriding env var (e.g. a CI
+         job exporting ``EASYEDA2KICAD`` in shell). Pre-this-precedence
+         change the OS env was ignored entirely.
+      3. User-defined vars from ``kicad_common.json::environment.vars``
+         (KiCad ``Preferences > Configure Paths``). These are the
+         normal source for things like ``${EASYEDA2KICAD}``,
+         ``${MY_LIBS}`` — KiCad itself only injects them when the GUI
+         is running, so we read them out of the config file.
 
-    Unknown placeholders are left intact so the caller's ``exists()`` probe
-    fails loudly rather than dispatching to a partially-substituted path.
+    Unknown placeholders are left intact so the caller's ``exists()``
+    probe fails loudly rather than dispatching to a partially-
+    substituted path.
     """
     if project_dir is not None:
         uri = uri.replace("${KIPRJMOD}", str(project_dir))
         uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    # OS env wins over kicad_common.json — matches the GUI's documented
+    # precedence per `kicad/include/env_paths.h` (OS env consulted before
+    # falling back to the config-file mapping).
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
     for key, value in find_kicad_user_env_vars().items():
         uri = uri.replace("${" + key + "}", value)
     return uri
@@ -1538,32 +1552,167 @@ def _replace_property_value(block: str, field_name: str, value: str) -> str:
     return pattern.sub(lambda match: f"{match.group(1)}{_sexpr_string(value)}", block, count=1)
 
 
-def _set_pad_net_name(pad_block: str, net_name: str) -> str:
-    net_pattern = re.compile(rf"(\(net\s+){STRING_PATTERN}")
-    if net_pattern.search(pad_block):
-        return net_pattern.sub(
-            lambda match: f"{match.group(1)}{_sexpr_string(net_name)}",
-            pad_block,
-            count=1,
-        )
+def _set_pad_net_name(pad_block: str, net_name: str, net_code: int | None = None) -> str:
+    """Replace the ``(net ...)`` clause inside a pad block with ``net_name``.
+
+    Tolerates both serialization forms KiCad uses:
+
+      ``(net "/GND_RTN")``       - bare-name form (no integer code)
+      ``(net 12 "/GND_RTN")``    - canonical form with the .kicad_pcb's
+                                   integer code; this is what real boards
+                                   carry, and net codes are the load-time
+                                   identifier pcbnew uses internally
+
+    When ``net_code`` is supplied (caller looked it up in the top-level
+    net table), the rewrite emits the canonical form. When it's omitted,
+    an existing integer is preserved across the rename, or the bare-name
+    form is written. Before this fix the regex only matched the
+    bare-name form, so against a real board (which always uses the
+    integer form) it fell through to the append branch and produced two
+    contradictory ``(net ...)`` clauses on the same pad.
+    """
+    net_pattern = re.compile(rf"\(net\s+(\d+)?\s*{STRING_PATTERN}\)")
+    match = net_pattern.search(pad_block)
+    if match is not None:
+        if net_code is not None:
+            replacement = f"(net {net_code} {_sexpr_string(net_name)})"
+        elif match.group(1):
+            replacement = f"(net {match.group(1)} {_sexpr_string(net_name)})"
+        else:
+            replacement = f"(net {_sexpr_string(net_name)})"
+        return pad_block[: match.start()] + replacement + pad_block[match.end() :]
     insert_at = pad_block.rfind("\n)")
     if insert_at == -1:
         insert_at = pad_block.rfind(")")
     if insert_at == -1:
         return pad_block
-    return pad_block[:insert_at] + f"\n\t\t(net {_sexpr_string(net_name)})" + pad_block[insert_at:]
+    if net_code is not None:
+        new_clause = f"\n\t\t(net {net_code} {_sexpr_string(net_name)})"
+    else:
+        new_clause = f"\n\t\t(net {_sexpr_string(net_name)})"
+    return pad_block[:insert_at] + new_clause + pad_block[insert_at:]
 
 
-def _assign_pad_nets(block: str, pad_nets: dict[str, str]) -> str:
+def _parse_pcb_net_table(content: str) -> dict[str, int]:
+    """Return ``{net_name: code}`` from the top-level ``(net N "name")``
+    entries inside ``(kicad_pcb ...)``. Boards that have never been
+    synced through pcbnew (or that were assembled by a previous
+    headless-sync round) may have zero entries — pcbnew tolerates
+    bare-name pad clauses in that case. The caller decides whether to
+    emit canonical integer-coded clauses based on whether this returns
+    a non-empty mapping.
+    """
+    table: dict[str, int] = {}
+    for match in re.finditer(rf'\(net\s+(\d+)\s+{STRING_PATTERN}\s*\)', content):
+        try:
+            code = int(match.group(1))
+        except ValueError:
+            continue
+        name = match.group(2)
+        # Skip clauses that sit INSIDE a (pad ...) — only top-level
+        # entries count. We don't have a real s-expression parser here,
+        # so use a cheap heuristic: top-level net entries appear
+        # immediately after a newline + a single tab; pad-level ones
+        # are nested deeper (two-plus tabs) or inline on the pad's line.
+        start = match.start()
+        line_start = content.rfind("\n", 0, start)
+        prefix = content[line_start + 1 : start] if line_start >= 0 else content[:start]
+        if prefix != "\t":
+            continue
+        if name not in table:
+            table[name] = code
+    return table
+
+
+def _allocate_pcb_net_codes(
+    existing: dict[str, int],
+    new_net_names: set[str],
+) -> tuple[dict[str, int], list[tuple[int, str]]]:
+    """Allocate integer codes for net names that aren't yet in ``existing``.
+
+    Returns ``(combined_table, new_entries)`` where ``combined_table``
+    maps every name (existing + new) to its code and ``new_entries`` is
+    the ordered ``(code, name)`` list of additions the caller must
+    inject into the top-level net table on disk.
+    """
+    combined = dict(existing)
+    next_code = (max(existing.values()) + 1) if existing else 1
+    new_entries: list[tuple[int, str]] = []
+    for name in sorted(new_net_names):
+        if name in combined:
+            continue
+        combined[name] = next_code
+        new_entries.append((next_code, name))
+        next_code += 1
+    return combined, new_entries
+
+
+def _inject_pcb_net_table_entries(content: str, new_entries: list[tuple[int, str]]) -> str:
+    """Insert new ``(net <code> "name")`` lines into the top-level net
+    table. If a table already exists, append after the last entry; if
+    no table exists, slot the new block right after ``(setup ...)`` so
+    KiCad's loader sees nets defined before any footprint references
+    them.
+    """
+    if not new_entries:
+        return content
+    new_lines = "\n".join(f'\t(net {code} {_sexpr_string(name)})' for code, name in new_entries)
+
+    # Find last existing top-level net entry
+    last_match = None
+    for match in re.finditer(rf'\n\t\(net\s+\d+\s+{STRING_PATTERN}\s*\)', content):
+        last_match = match
+    if last_match is not None:
+        insert_at = last_match.end()
+        return content[:insert_at] + "\n" + new_lines + content[insert_at:]
+
+    # No existing table — insert after (setup ...) so it precedes any
+    # footprint blocks that will reference these nets.
+    setup_match = re.search(r'\n\t\(setup\b', content)
+    if setup_match is not None:
+        # Balance-extract the setup block to find its closing paren.
+        setup_block, length = _extract_block(content, setup_match.start() + 1)
+        if setup_block:
+            insert_at = setup_match.start() + 1 + length
+            return content[:insert_at] + "\n" + new_lines + content[insert_at:]
+
+    # Last resort: insert right before the first (footprint ...) block.
+    fp_match = re.search(r'\n\t\(footprint\s', content)
+    if fp_match is not None:
+        return content[: fp_match.start()] + "\n" + new_lines + content[fp_match.start() :]
+
+    return content + "\n" + new_lines
+
+
+def _assign_pad_nets(
+    block: str,
+    pad_nets: dict[str, str],
+    net_codes: dict[str, int] | None = None,
+) -> str:
+    """Rewrite every named pad's ``(net ...)`` clause in ``block``.
+
+    When ``net_codes`` is supplied, the rewrite uses canonical
+    ``(net <code> "name")`` form, ensuring the pad references the same
+    integer code KiCad's loader reads from the top-level net table. Without
+    it, an existing integer code is preserved and only the name changes —
+    safe for in-place renames, but unsafe for net REASSIGNMENTS where the
+    pad is being moved from one logical net to another.
+    """
     rebuilt: list[str] = []
     cursor = 0
+    codes = net_codes or {}
     while cursor < len(block):
         if block[cursor:].startswith("(pad"):
             pad_block, length = _extract_block(block, cursor)
             if pad_block:
                 pad_match = re.match(rf"\(pad\s+{STRING_PATTERN}", pad_block.lstrip())
                 if pad_match and pad_match.group(1) in pad_nets:
-                    pad_block = _set_pad_net_name(pad_block, pad_nets[pad_match.group(1)])
+                    target_name = pad_nets[pad_match.group(1)]
+                    pad_block = _set_pad_net_name(
+                        pad_block,
+                        target_name,
+                        net_code=codes.get(target_name),
+                    )
                 rebuilt.append(pad_block)
                 cursor += length
                 continue
@@ -3307,6 +3456,7 @@ def register(mcp: FastMCP) -> None:
         origin_x_mm: float = 20.0,
         origin_y_mm: float = 20.0,
         grid_mm: float = 2.54,
+        backup: bool = True,
     ) -> str:
         """Report (and optionally apply) what F8 would change, headlessly.
 
@@ -3371,6 +3521,17 @@ def register(mcp: FastMCP) -> None:
             for ref, pin in nodes:
                 nl_pad_nets[(ref, pin)] = net_name
 
+        # Resolve canonical integer codes for every net the netlist
+        # references. Without this, new pads (and rewritten pads) emit
+        # bare-name (net "...") clauses that pcbnew loads as net 0 when
+        # the board carries a populated top-level net table — see the
+        # kicad-pcb-expert audit on PR #20.
+        existing_net_table = _parse_pcb_net_table(pcb_text)
+        net_codes, new_net_entries = _allocate_pcb_net_codes(
+            existing_net_table,
+            set(nl_nets.keys()),
+        )
+
         additions_to_apply: list[str] = []
         skipped_additions: list[tuple[str, str]] = []  # (ref, reason)
         replacements: dict[str, str] = {}
@@ -3403,6 +3564,11 @@ def register(mcp: FastMCP) -> None:
             except (FileNotFoundError, ValueError) as exc:
                 skipped_additions.append((ref, f"{type(exc).__name__}: {exc}"))
                 continue
+            # _render_board_footprint_block emits bare-name pad clauses
+            # via _assign_pad_nets without a net_codes map. Upgrade them
+            # to canonical (net N "name") form in-place so pcbnew loads
+            # them against the freshly-allocated top-level entries.
+            block = _assign_pad_nets(block, pad_nets, net_codes=net_codes)
             additions_to_apply.append(block)
 
         # ---- Net changes on existing footprints ----
@@ -3415,17 +3581,40 @@ def register(mcp: FastMCP) -> None:
             if existing is None:
                 # Shouldn't happen — net_changes are scoped to existing refs.
                 continue
-            new_block = _assign_pad_nets(str(existing["block"]), pad_changes)
+            new_block = _assign_pad_nets(
+                str(existing["block"]),
+                pad_changes,
+                net_codes=net_codes,
+            )
             replacements[ref] = new_block
 
-        applied_anything = bool(additions_to_apply or replacements)
+        applied_anything = bool(additions_to_apply or replacements or new_net_entries)
+        backup_path: Path | None = None
+        if applied_anything and backup:
+            # Take a one-shot backup before mutating. Unlike pcbnew's F8
+            # (which is in-process undoable), our mutation is a direct
+            # file write — without a snapshot a botched apply has no
+            # recovery path. Filename uses a fixed suffix so successive
+            # apply calls overwrite the same file rather than littering
+            # the project dir.
+            backup_path = pcb_path.with_suffix(pcb_path.suffix + ".bak-pre-sync")
+            backup_path.write_bytes(pcb_path.read_bytes())
         if applied_anything:
             _transactional_board_write(
-                lambda current: _replace_board_blocks(current, replacements, additions_to_apply)
+                lambda current: _replace_board_blocks(
+                    _inject_pcb_net_table_entries(current, new_net_entries),
+                    replacements,
+                    additions_to_apply,
+                )
             )
 
         # ---- Report ----
         out_lines = [report_header.rstrip(), "Headless F8 apply summary:"]
+        if new_net_entries:
+            out_lines.append(
+                f"  New net-table entries injected: {len(new_net_entries)} "
+                "(canonical (net N \"name\") form added at top of .kicad_pcb)"
+            )
         out_lines.append(f"  Footprints added: {len(additions_to_apply)}")
         for ref in cap_additions:
             if ref not in {r for r, _ in skipped_additions}:
@@ -3457,6 +3646,16 @@ def register(mcp: FastMCP) -> None:
             )
         if not applied_anything:
             out_lines.append("  (no changes applied)")
+        if applied_anything and backup_path is not None:
+            out_lines.append(f"  Backup written to: {backup_path}")
+        if applied_anything:
+            # File-based mutation; any open pcbnew has stale in-memory state.
+            # Mirror the schematic-side SAVED_NO_DOC wording so an agent sees
+            # the same shape on either side of the sync.
+            out_lines.append(
+                "Reopen the .kicad_pcb in pcbnew (or File > Revert if it's "
+                "already open) so the editor sees the new state."
+            )
         return "\n".join(out_lines)
 
     @mcp.tool()

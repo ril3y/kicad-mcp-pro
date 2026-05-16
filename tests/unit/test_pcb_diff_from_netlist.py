@@ -20,9 +20,15 @@ from __future__ import annotations
 from typing import Any
 
 from kicad_mcp.tools.pcb import (
+    _allocate_pcb_net_codes,
     _diff_pcb_against_netlist,
+    _expand_kicad_lib_uri,
     _format_pcb_netlist_diff_report,
+    _inject_pcb_net_table_entries,
     _parse_kicadsexpr_netlist,
+    _parse_pcb_net_table,
+    _run_kicad_cli_netlist_export,
+    _set_pad_net_name,
 )
 
 
@@ -305,15 +311,270 @@ def test_apply_mode_writes_pad_net_rewrites_to_existing_footprints(
     assert "Existing footprints with pad-net rewrites: 1" in result_text
     assert "J1: 2->/GND_RTN" in result_text
 
-    # The .kicad_pcb on disk should now have pad 2 on /GND_RTN
+    # The .kicad_pcb on disk should now have pad 2 on /GND_RTN — and
+    # critically should NOT also retain the original /+12V_PWR clause
+    # on pad 2. The pre-fix bug appended a bare-name clause alongside
+    # the original integer-coded clause, producing two contradictory
+    # (net ...) entries on the same pad.
+    from kicad_mcp.utils.sexpr import _extract_block
+
     updated = pcb_file.read_text(encoding="utf-8")
-    # Pad 1 stays on /+12V_PWR; pad 2 should now reference /GND_RTN
-    pad2_block = re.search(r'\(pad\s+"2".*?\n\s*\)', updated, re.DOTALL)
-    assert pad2_block is not None
-    assert "/GND_RTN" in pad2_block.group(0)
-    pad1_block = re.search(r'\(pad\s+"1".*?\n\s*\)', updated, re.DOTALL)
-    assert pad1_block is not None
-    assert "/+12V_PWR" in pad1_block.group(0)
+
+    def _extract_pad(text: str, pad_number: str) -> str:
+        match = re.search(rf'\(pad\s+"{re.escape(pad_number)}"', text)
+        assert match is not None, f"pad {pad_number} not found in updated PCB"
+        block, _ = _extract_block(text, match.start())
+        return block
+
+    pad1 = _extract_pad(updated, "1")
+    pad2 = _extract_pad(updated, "2")
+
+    # Pad 2 was rewritten: only /GND_RTN, no stale /+12V_PWR.
+    assert "/GND_RTN" in pad2
+    assert "/+12V_PWR" not in pad2, (
+        "stale /+12V_PWR clause must be replaced, not appended-alongside"
+    )
+    assert pad2.count("(net ") == 1, "pad 2 must have exactly one (net ...) clause"
+
+    # Pad 1 stays on /+12V_PWR untouched.
+    assert "/+12V_PWR" in pad1
+    assert "/GND_RTN" not in pad1
+    assert pad1.count("(net ") == 1
+
+
+def test_set_pad_net_name_replaces_integer_coded_clause_without_appending() -> None:
+    """P0 repro from PR #20 audit: the pre-fix regex only matched
+    ``(net "X")`` and silently appended a second clause when the real
+    pad had ``(net 1 "X")``. Pin that the rewrite now produces exactly
+    one (net ...) clause across all four input shapes."""
+    int_coded = '(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "/OLD"))'
+    result = _set_pad_net_name(int_coded, "/NEW")
+    assert result.count("(net ") == 1
+    assert "/OLD" not in result
+    assert "(net 1 \"/NEW\")" in result, "integer code must be preserved"
+
+
+def test_set_pad_net_name_emits_canonical_form_when_code_supplied() -> None:
+    """Apply-mode passes a freshly-allocated net_code; the rewrite must
+    emit (net N "name") form so the pad references the same integer the
+    top-level net table uses. Without this, pcbnew loads the pad as
+    net 0 regardless of the name string (the kicad-pcb-expert P0)."""
+    bare = '(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (net "/OLD"))'
+    upgraded = _set_pad_net_name(bare, "/NEW", net_code=42)
+    assert "(net 42 \"/NEW\")" in upgraded
+    assert "/OLD" not in upgraded
+    assert upgraded.count("(net ") == 1
+
+
+def test_parse_pcb_net_table_returns_name_to_code_map_from_top_level_entries() -> None:
+    """``_parse_pcb_net_table`` must extract ONLY the top-level
+    ``(net N "name")`` entries; pad-level clauses (one tab deeper) must
+    be ignored, otherwise pad-side stale clauses would pollute the
+    allocator's "what codes are taken" view."""
+    pcb_text = (
+        '(kicad_pcb (version 20240108)\n'
+        '\t(net 0 "")\n'
+        '\t(net 1 "/+12V_PWR")\n'
+        '\t(net 12 "/GND_RTN")\n'
+        '\t(footprint "Test:R"\n'
+        '\t\t(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (net 99 "/STALE_PAD_LEVEL"))\n'
+        '\t)\n'
+        ')\n'
+    )
+    table = _parse_pcb_net_table(pcb_text)
+    assert table == {"": 0, "/+12V_PWR": 1, "/GND_RTN": 12}
+    assert "/STALE_PAD_LEVEL" not in table, "pad-level (net ...) must not bleed into the table"
+
+
+def test_allocate_pcb_net_codes_assigns_next_free_integer() -> None:
+    """New net names get codes one past the current max; existing codes
+    pass through unchanged. Allocations are sorted by name for
+    deterministic diff output."""
+    existing = {"": 0, "/GND": 1, "/+12V": 5}
+    combined, new_entries = _allocate_pcb_net_codes(existing, {"/GND", "/SIG_A", "/SIG_B"})
+    assert combined == {"": 0, "/GND": 1, "/+12V": 5, "/SIG_A": 6, "/SIG_B": 7}
+    assert new_entries == [(6, "/SIG_A"), (7, "/SIG_B")]
+
+
+def test_allocate_pcb_net_codes_handles_empty_existing_table() -> None:
+    """Boards with zero top-level entries (e.g. fresh from
+    pcb_sync_from_schematic before this fix) start the allocator at 1."""
+    combined, new_entries = _allocate_pcb_net_codes({}, {"/NET_A", "/NET_B"})
+    assert combined == {"/NET_A": 1, "/NET_B": 2}
+    assert new_entries == [(1, "/NET_A"), (2, "/NET_B")]
+
+
+def test_inject_pcb_net_table_entries_appends_after_existing_table() -> None:
+    """New ``(net N "name")`` lines slot after the last existing entry —
+    preserving net-table contiguity that pcbnew tooling depends on."""
+    pcb_text = (
+        '(kicad_pcb (version 20240108)\n'
+        '\t(net 0 "")\n'
+        '\t(net 1 "/EXISTING")\n'
+        '\t(footprint "Test:R"\n'
+        '\t)\n'
+        ')\n'
+    )
+    updated = _inject_pcb_net_table_entries(pcb_text, [(2, "/NEW")])
+    assert '(net 2 "/NEW")' in updated
+    # Must appear AFTER (net 1 "/EXISTING"), BEFORE (footprint ...).
+    assert updated.index('(net 2 "/NEW")') > updated.index('(net 1 "/EXISTING")')
+    assert updated.index('(net 2 "/NEW")') < updated.index("(footprint")
+
+
+def test_inject_pcb_net_table_entries_inserts_block_when_no_existing_table() -> None:
+    """Boards with zero top-level (net ...) entries (e.g. an early-stage
+    file from this fork) need the block injected right after (setup ...)
+    so KiCad's loader sees nets defined before footprints reference them."""
+    pcb_text = (
+        '(kicad_pcb (version 20240108)\n'
+        '\t(general (thickness 1.6))\n'
+        '\t(setup (pad_to_mask_clearance 0))\n'
+        '\t(footprint "Test:R"\n'
+        '\t)\n'
+        ')\n'
+    )
+    updated = _inject_pcb_net_table_entries(pcb_text, [(1, "/FIRST"), (2, "/SECOND")])
+    assert '(net 1 "/FIRST")' in updated
+    assert '(net 2 "/SECOND")' in updated
+    # Both go after setup, before footprint.
+    assert updated.index('(net 1 "/FIRST")') > updated.index("(setup")
+    assert updated.index('(net 2 "/SECOND")') < updated.index("(footprint")
+
+
+def test_expand_kicad_lib_uri_substitutes_user_vars_and_leaves_unknowns_intact(
+    monkeypatch: Any,
+) -> None:
+    """Direct unit test for the URI expander — pinned because every
+    headless library lookup runs through it. A regression that gated
+    user-vars on KIPRJMOD being present would pass every other test."""
+    from pathlib import Path
+
+    monkeypatch.delenv("EASYEDA2KICAD", raising=False)
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": "/p/external", "MY_LIBS": "/p/mylibs"},
+    )
+
+    result = _expand_kicad_lib_uri(
+        "${KIPRJMOD}/${EASYEDA2KICAD}/${MY_LIBS}/${UNKNOWN}/footprint.kicad_mod",
+        Path("/proj"),
+    )
+    # KIPRJMOD + both user vars expanded; ${UNKNOWN} survives so the
+    # caller's .exists() probe will fail visibly.
+    assert "/p/external" in result
+    assert "/p/mylibs" in result
+    assert "${UNKNOWN}" in result
+    assert "${KIPRJMOD}" not in result
+    assert "${EASYEDA2KICAD}" not in result
+
+
+def test_expand_kicad_lib_uri_os_env_overrides_kicad_config() -> None:
+    """Precedence: process env > kicad_common.json (matches KiCad GUI
+    behavior per env_paths.h). A CI runner exporting a var in shell
+    overrides whatever the developer's config has set locally."""
+    from pathlib import Path
+    import os
+
+    os.environ["TEST_LIB_PATH_OVERRIDE_4216"] = "/from/os/env"
+    try:
+        result = _expand_kicad_lib_uri(
+            "${TEST_LIB_PATH_OVERRIDE_4216}/foo.kicad_mod",
+            Path("/proj"),
+        )
+        assert result == "/from/os/env/foo.kicad_mod"
+    finally:
+        del os.environ["TEST_LIB_PATH_OVERRIDE_4216"]
+
+
+def test_run_kicad_cli_netlist_export_invokes_correct_argv(
+    monkeypatch: Any, tmp_path: Any,
+) -> None:
+    """Pin the kicad-cli command line so a typo (``kicadeeschema`` vs
+    ``kicadsexpr``, missing --format flag, swapped --output) doesn't
+    slip through. Test-sufficiency audit flagged this as the
+    highest-risk gap: every other test stubs ``_run_kicad_cli_*`` so
+    the real argv was untested."""
+    import subprocess as sp
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    captured: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        captured.append(argv)
+        # Write a minimal valid netlist so the success path is reached.
+        out_idx = argv.index("--output")
+        out_path = Path(argv[out_idx + 1])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("(export (version \"E\"))\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    # The function gates on cfg.kicad_cli.exists(); point at a real file
+    # in tmp_path so the binary-availability check passes without needing
+    # a real kicad-cli on the test box.
+    stub_cli = tmp_path / "kicad-cli-stub"
+    stub_cli.write_bytes(b"")
+    monkeypatch.setattr("kicad_mcp.tools.pcb.get_config", lambda: SimpleNamespace(
+        kicad_cli=stub_cli, cli_timeout=30,
+    ))
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+    out = tmp_path / "out" / "netlist.net"
+    code, msg = _run_kicad_cli_netlist_export(sch, out)
+
+    assert code == 0
+    assert len(captured) == 1, "first variant should succeed without fallback"
+    argv = captured[0]
+    assert argv[1:5] == ["sch", "export", "netlist", "--format"]
+    assert "kicadsexpr" in argv
+    assert "--output" in argv
+    assert str(out) in argv
+    assert str(sch) in argv
+
+
+def test_run_kicad_cli_netlist_export_falls_back_to_input_form_on_failure(
+    monkeypatch: Any, tmp_path: Any,
+) -> None:
+    """Older kicad-cli builds (9.0 transition) required ``--input``;
+    newer ones take the positional. Without this fallback a partial-
+    refresh CI environment with a stale CLI would silently fail."""
+    import subprocess as sp
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    call_count = {"n": 0}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # First variant: positional input. Pretend the CLI rejects it.
+            return SimpleNamespace(returncode=2, stdout="", stderr="unknown positional")
+        # Second variant: --input form. Succeed and write output.
+        out_idx = argv.index("--output")
+        Path(argv[out_idx + 1]).parent.mkdir(parents=True, exist_ok=True)
+        Path(argv[out_idx + 1]).write_text("(export)\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    # The function gates on cfg.kicad_cli.exists(); point at a real file
+    # in tmp_path so the binary-availability check passes without needing
+    # a real kicad-cli on the test box.
+    stub_cli = tmp_path / "kicad-cli-stub"
+    stub_cli.write_bytes(b"")
+    monkeypatch.setattr("kicad_mcp.tools.pcb.get_config", lambda: SimpleNamespace(
+        kicad_cli=stub_cli, cli_timeout=30,
+    ))
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+    out = tmp_path / "out" / "netlist.net"
+    code, _ = _run_kicad_cli_netlist_export(sch, out)
+
+    assert code == 0
+    assert call_count["n"] == 2, "second variant must be tried when first fails"
 
 
 def test_format_diff_report_caps_long_sections_with_summary() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import functools
 import inspect
 import json
 import platform
@@ -286,6 +287,7 @@ def _kicad_config_dirs() -> list[Path]:
     ]
 
 
+@functools.lru_cache(maxsize=1)
 def find_kicad_user_env_vars() -> dict[str, str]:
     """Return the ``environment.vars`` mapping from KiCad's
     ``kicad_common.json`` (e.g. ``{"EASYEDA2KICAD": "X:/Dropbox/..."}``).
@@ -297,6 +299,12 @@ def find_kicad_user_env_vars() -> dict[str, str]:
     they're a KiCad-internal namespace. Without this loader, headless
     footprint lookups fail with ``Footprint '...' was not found`` even
     when the file exists.
+
+    Cached with ``lru_cache(maxsize=1)`` because a large board can
+    trigger thousands of footprint lookups during a sync; the JSON read
+    is ~100 µs per call which adds up. Call
+    ``find_kicad_user_env_vars.cache_clear()`` in tests when monkey-
+    patching ``_kicad_config_dirs``.
 
     Returns an empty dict if no config is found.
     """
