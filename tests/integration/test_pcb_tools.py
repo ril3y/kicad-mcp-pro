@@ -1802,3 +1802,65 @@ async def test_pcb_check_creepage_clearance_reports_worst_pad_pair(mock_board) -
     assert "Worst pad pair: J1.1 (VIN) vs J1.2 (GND)" in creepage
     assert "Estimated edge-to-edge clearance: 1.200 mm" in creepage
     assert "Required creepage" in creepage
+
+
+@pytest.mark.anyio
+async def test_pcb_get_footprints_and_pads_read_headless_from_configured_pcb(
+    sample_project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When pcbnew is closed (or has a different project open), the read tools
+    # must parse the configured project's .kicad_pcb from disk and emit
+    # data formatted to match the live-IPC variants — same "X (Y)
+    # @ (x, y) mm layer=..." for footprints, same "ref:pad net=... @ pos"
+    # for pads, with board-absolute coordinates (not footprint-local).
+    monkeypatch.setattr("kicad_mcp.tools.pcb._board_is_open", lambda: False)
+    pcb_file = sample_project / "demo.kicad_pcb"
+    pcb_file.write_text(
+        "\n".join(
+            [
+                "(kicad_pcb",
+                "\t(version 20250216)",
+                '\t(generator "pytest")',
+                '\t(footprint "Connector_Generic:Conn_01x02"',
+                '\t\t(layer "F.Cu")',
+                '\t\t(uuid "11111111-2222-3333-4444-555555555555")',
+                "\t\t(at 50 40 0)",
+                '\t\t(property "Reference" "J1"',
+                "\t\t\t(at 0 -2 0)",
+                "\t\t)",
+                '\t\t(property "Value" "Conn"',
+                "\t\t\t(at 0 2 0)",
+                "\t\t)",
+                '\t\t(pad "1" thru_hole circle (at -1.27 0) (size 1.7 1.7) (drill 1.0)',
+                '\t\t\t(layers "*.Cu" "*.Mask")',
+                '\t\t\t(net "/VIN")',
+                "\t\t)",
+                '\t\t(pad "2" thru_hole circle (at 1.27 0) (size 1.7 1.7) (drill 1.0)',
+                '\t\t\t(layers "*.Cu" "*.Mask")',
+                '\t\t\t(net 5 "/GND")',
+                "\t\t)",
+                "\t)",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    server = build_server("pcb")
+    await call_tool_text(server, "kicad_set_project", {"project_dir": str(sample_project)})
+
+    footprints_out = await call_tool_text(server, "pcb_get_footprints", {})
+    pads_out = await call_tool_text(server, "pcb_get_pads", {})
+
+    assert "Footprints (1 total)" in footprints_out
+    assert "J1 (Conn)" in footprints_out
+    assert "(50.00, 40.00)" in footprints_out  # footprint origin
+    assert "layer=F.Cu" in footprints_out
+
+    assert "Pads (2 total)" in pads_out
+    # Board-absolute coords: footprint at (50, 40) rotation 0 + pad-local
+    # (-1.27, 0) and (1.27, 0) -> absolute (48.73, 40) and (51.27, 40).
+    # Legacy KiCad 5/6/7 (net 5 "/GND") form must still parse.
+    assert "J1:1 net=/VIN @ (48.73, 40.00) mm" in pads_out
+    assert "J1:2 net=/GND @ (51.27, 40.00) mm" in pads_out

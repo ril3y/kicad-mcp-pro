@@ -179,6 +179,16 @@ def _matches_layer_filter(layer: int, filter_layer: str) -> bool:
     return resolve_layer_name(filter_layer) == resolve_layer_name(board_layer_name)
 
 
+def _matches_layer_filter_name(layer_name: str, filter_layer: str) -> bool:
+    """Headless variant of :func:`_matches_layer_filter` that takes a layer name
+    string (as found in a parsed ``.kicad_pcb`` block) instead of an integer
+    enum value. Used by file-based readers when no live ``BoardLayer`` enum is
+    available."""
+    if not filter_layer:
+        return True
+    return resolve_layer_name(filter_layer) == resolve_layer_name(layer_name)
+
+
 def _find_net(name: str) -> Net:
     """Resolve a net name to the live ``Net`` instance on the active board.
 
@@ -639,6 +649,66 @@ def _transactional_board_write(mutator: Callable[[str], str]) -> str:
     temp_path.replace(board_file)
     clear_ttl_cache()
     return str(board_file)
+
+
+def _resolve_read_source() -> tuple[Path | None, bool]:
+    """Decide whether a read-only ``pcb_get_*`` tool should use live IPC or
+    parse from the configured project's ``.kicad_pcb`` on disk.
+
+    Returns ``(pcb_path, use_live)``:
+    - ``pcb_path`` is the configured PCB file path, or ``None`` if no
+      project is configured AND a board IS open (live-only mode).
+    - ``use_live`` is ``True`` when the live-IPC path should be used.
+
+    Raises ``ValueError`` (via ``_get_pcb_file_for_sync``) only when no
+    project is configured AND no board is open — there's no data source.
+    """
+    try:
+        pcb_path: Path | None = _get_pcb_file_for_sync()
+    except ValueError:
+        pcb_path = None
+
+    if _board_is_open():
+        use_live = pcb_path is None or _live_board_matches_configured(pcb_path)
+    else:
+        if pcb_path is None:
+            raise ValueError(
+                "No PCB file is configured. Call kicad_set_project() or set KICAD_MCP_PCB_FILE."
+            )
+        use_live = False
+    return pcb_path, use_live
+
+
+def _live_board_matches_configured(pcb_path: Path) -> bool:
+    """Decide whether the running pcbnew has the configured project open.
+
+    ``kipy.board.Board.name`` returns the **basename** of the board file
+    (e.g. ``"junction.kicad_pcb"``), NOT a full path — verified against
+    ``kipy/board.py`` and the upstream ``board_filename`` proto spec.
+    So we compare basenames only.
+
+    When the open board's identity can't be determined (mock boards in
+    tests, IPC returning an empty / unexpected value), we **default to
+    True**. The headless file-parse fallback is meant for the deliberate
+    "configured a different project than what pcbnew has open" case;
+    falling to it on ambiguity would silently bypass mocks in existing
+    integration tests and hide real IPC data.
+    """
+    try:
+        live_name = str(get_board().name)
+    except Exception as exc:  # noqa: BLE001 - any IPC weirdness => stay live
+        logger.debug("board_name_unavailable", error=str(exc))
+        return True
+    # Only attempt the basename comparison if the IPC reply looks like an
+    # actual .kicad_pcb filename. Mock boards in tests, partially-initialized
+    # IPC state, or future kipy versions that change the field shape can all
+    # return strings that don't (e.g. ``"<MagicMock ...>"``). Treat anything
+    # that isn't recognisably a PCB filename as "trust the live board" —
+    # the alternative is silently dropping mock-injected board state in
+    # existing integration tests.
+    if not live_name or not live_name.lower().endswith(".kicad_pcb"):
+        return True
+    return Path(live_name).name == pcb_path.name
 
 
 def _board_is_open() -> bool:
@@ -1855,38 +1925,90 @@ def register(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    @requires_kicad_running
+    @headless_compatible
     def pcb_get_footprints(
         page: int = 1,
         page_size: int = 50,
         filter_layer: str = "",
     ) -> str:
-        """List board footprints."""
-        all_footprints = [
-            footprint
-            for footprint in cast(Iterable[_FootprintLike], get_board().get_footprints())
-            if _matches_layer_filter(footprint.layer, filter_layer)
-        ]
-        footprints, total, page_count = _paginate(all_footprints, page=page, page_size=page_size)
+        """List board footprints.
+
+        Reads the .kicad_pcb file of the project configured by
+        ``kicad_set_project()`` so the answer always reflects the configured
+        project — not whichever board pcbnew happens to have open. Live IPC
+        is used only when the open board's file matches the configured one,
+        so unsaved in-memory edits are visible in that case.
+        """
+        pcb_path, use_live = _resolve_read_source()
+
+        if use_live:
+            all_footprints = [
+                footprint
+                for footprint in cast(Iterable[_FootprintLike], get_board().get_footprints())
+                if _matches_layer_filter(footprint.layer, filter_layer)
+            ]
+            footprints, total, page_count = _paginate(
+                all_footprints, page=page, page_size=page_size
+            )
+            if total == 0:
+                if filter_layer:
+                    return "No footprints match the supplied layer filter on the active board."
+                return "No footprints are present on the active board."
+            if not footprints:
+                return f"Footprint page {page} is out of range. Available pages: 1-{page_count}."
+            lines = [
+                f"Footprints ({total} total):",
+                f"- Page {page}/{page_count} | Showing {len(footprints)}",
+            ]
+            for footprint in footprints:
+                lines.append(
+                    f"- {footprint.reference_field.text.value} "
+                    f"({footprint.value_field.text.value}) "
+                    f"@ ({nm_to_mm(_coord_nm(footprint.position, 'x')):.2f}, "
+                    f"{nm_to_mm(_coord_nm(footprint.position, 'y')):.2f}) mm "
+                    f"layer={BoardLayer.Name(footprint.layer)} "
+                    f"id={_format_selection_id(footprint)}"
+                )
+            return "\n".join(lines)
+
+        # Headless / project-mismatch path: parse the configured PCB file.
+        # ``_resolve_read_source`` guarantees pcb_path is non-None whenever
+        # ``use_live`` is False; the cast is just to satisfy the type checker.
+        pcb_path = cast(Path, pcb_path)
+        content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
+        parsed = _parse_board_footprint_blocks(content)
+        entries = []
+        for ref, info in parsed.items():
+            layer_name = str(info.get("layer_name") or "F.Cu")
+            if filter_layer and not _matches_layer_filter_name(layer_name, filter_layer):
+                continue
+            entries.append((ref, info, layer_name))
+        entries.sort(key=lambda item: item[0])
+        total = len(entries)
         if total == 0:
             if filter_layer:
-                return "No footprints match the supplied layer filter on the active board."
-            return "No footprints are present on the active board."
-        if not footprints:
+                return "No footprints match the supplied layer filter in the configured PCB file."
+            return "No footprints are present in the configured PCB file."
+
+        page_count = max(1, (total + page_size - 1) // page_size)
+        if page < 1 or page > page_count:
             return f"Footprint page {page} is out of range. Available pages: 1-{page_count}."
+        slice_start = (page - 1) * page_size
+        page_entries = entries[slice_start : slice_start + page_size]
 
         lines = [
             f"Footprints ({total} total):",
-            f"- Page {page}/{page_count} | Showing {len(footprints)}",
+            f"- Page {page}/{page_count} | Showing {len(page_entries)} (headless / file-based)",
         ]
-        for footprint in footprints:
+        for ref, info, layer_name in page_entries:
+            x = info.get("x_mm")
+            y = info.get("y_mm")
+            x_str = f"{x:.2f}" if isinstance(x, int | float) else "?"
+            y_str = f"{y:.2f}" if isinstance(y, int | float) else "?"
             lines.append(
-                f"- {footprint.reference_field.text.value} "
-                f"({footprint.value_field.text.value}) "
-                f"@ ({nm_to_mm(_coord_nm(footprint.position, 'x')):.2f}, "
-                f"{nm_to_mm(_coord_nm(footprint.position, 'y')):.2f}) mm "
-                f"layer={BoardLayer.Name(footprint.layer)} "
-                f"id={_format_selection_id(footprint)}"
+                f"- {ref} ({info.get('value', '')}) "
+                f"@ ({x_str}, {y_str}) mm layer={layer_name} "
+                f"name={info.get('name', '')}"
             )
         return "\n".join(lines)
 
@@ -1947,20 +2069,105 @@ def register(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    @requires_kicad_running
+    @headless_compatible
     def pcb_get_pads() -> str:
-        """List board pads."""
-        pad_entries, total = _limit(_iter_board_pads_with_refs())
-        if not pad_entries:
-            return "No pads are present on the active board."
+        """List board pads.
+
+        Reads from the configured project's ``.kicad_pcb`` so the answer
+        reflects ``kicad_set_project()`` rather than whichever board pcbnew
+        has open. Live IPC is used only when the open board's file matches
+        the configured one (so unsaved in-memory edits surface in that case).
+        """
+        pcb_path, use_live = _resolve_read_source()
+
+        if use_live:
+            pad_entries, total = _limit(_iter_board_pads_with_refs())
+            if not pad_entries:
+                return "No pads are present on the active board."
+            lines = [f"Pads ({total} total):"]
+            for index, (pad, ref) in enumerate(pad_entries, start=1):
+                lines.append(
+                    f"{index}. {ref}:{pad.number} "
+                    f"net={pad.net.name or '(none)'} "
+                    f"@ ({nm_to_mm(_coord_nm(pad.position, 'x')):.2f}, "
+                    f"{nm_to_mm(_coord_nm(pad.position, 'y')):.2f}) mm"
+                )
+            return "\n".join(lines)
+
+        # Headless / project-mismatch path: parse the configured PCB file.
+        # ``_resolve_read_source`` guarantees pcb_path is non-None whenever
+        # ``use_live`` is False; the cast is just to satisfy the type checker.
+        pcb_path = cast(Path, pcb_path)
+        content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
+        parsed = _parse_board_footprint_blocks(content)
+        rows: list[tuple[str, str, str, float | None, float | None]] = []
+        pad_pat = re.compile(r"\(pad\s+\"([^\"]+)\"")
+        # Net clause has two valid forms in .kicad_pcb files:
+        #   - KiCad 8/9/10: (net "/GND_RTN")
+        #   - KiCad 5/6/7 legacy: (net 1 "/GND_RTN")
+        # Active KiCad 10 boards may still have legacy forms if they were
+        # imported from older projects without a save-cycle re-write. Match
+        # both with an optional leading net-id capture.
+        net_pat = re.compile(r"\(net\s+(?:\d+\s+)?\"([^\"]+)\"\)")
+        at_pat = re.compile(r"\(at\s+([-\d.]+)\s+([-\d.]+)")
+        for ref, info in parsed.items():
+            block = str(info.get("block", ""))
+            fp_x = info.get("x_mm")
+            fp_y = info.get("y_mm")
+            fp_rot = info.get("rotation") or 0
+            cursor = 0
+            while cursor < len(block):
+                m = pad_pat.search(block, cursor)
+                if not m:
+                    break
+                ps, pe = _extract_block(block, m.start())
+                pad_block = block[m.start() : m.start() + pe]
+                pad_num = m.group(1)
+                nm = net_pat.search(pad_block)
+                net_name = nm.group(1) if nm else "(none)"
+                am = at_pat.search(pad_block)
+                # Compose board-absolute coords so the headless output matches
+                # the live IPC path (which kipy reports board-absolute). The
+                # ``(at x y)`` inside a ``(pad ...)`` block is relative to the
+                # footprint origin AND further rotated by the footprint's
+                # ``(at fx fy rot)`` value. Skip the math if anything is
+                # missing.
+                abs_x: float | None = None
+                abs_y: float | None = None
+                if (
+                    am is not None
+                    and isinstance(fp_x, int | float)
+                    and isinstance(fp_y, int | float)
+                ):
+                    local_x = float(am.group(1))
+                    local_y = float(am.group(2))
+                    rad = math.radians(float(fp_rot))
+                    cos_r = math.cos(rad)
+                    sin_r = math.sin(rad)
+                    # KiCad PCB rotation: counter-clockwise positive in math
+                    # convention, but the schematic page Y axis points down so
+                    # the displayed angle reads as clockwise. The composition
+                    # below produces board-absolute mm matching what kipy
+                    # reports via ``pad.position`` on the live IPC path.
+                    rotated_x = local_x * cos_r - local_y * sin_r
+                    rotated_y = local_x * sin_r + local_y * cos_r
+                    abs_x = float(fp_x) + rotated_x
+                    abs_y = float(fp_y) + rotated_y
+                rows.append((ref, pad_num, net_name, abs_x, abs_y))
+                cursor = m.start() + pe + 1
+
+        rows.sort(key=lambda r: (r[0], int(r[1]) if r[1].isdigit() else 1_000_000, r[1]))
+        total = len(rows)
+        if total == 0:
+            return "No pads are present in the configured PCB file."
+        cap = get_config().max_items_per_response
+        shown = rows[:cap]
         lines = [f"Pads ({total} total):"]
-        for index, (pad, ref) in enumerate(pad_entries, start=1):
-            lines.append(
-                f"{index}. {ref}:{pad.number} "
-                f"net={pad.net.name or '(none)'} "
-                f"@ ({nm_to_mm(_coord_nm(pad.position, 'x')):.2f}, "
-                f"{nm_to_mm(_coord_nm(pad.position, 'y')):.2f}) mm"
-            )
+        for index, (ref, pad_num, net_name, px, py) in enumerate(shown, start=1):
+            coord = ""
+            if px is not None and py is not None:
+                coord = f" @ ({px:.2f}, {py:.2f}) mm"
+            lines.append(f"{index}. {ref}:{pad_num} net={net_name}{coord}")
         return "\n".join(lines)
 
     @mcp.tool()

@@ -9,6 +9,8 @@ from kicad_mcp.tools.pcb import (
     _copper_layer_order,
     _impedance_context_for_layer,
     _inner_layer_graphic_block,
+    _matches_layer_filter_name,
+    _parse_board_footprint_blocks,
     _parse_netlist_text,
     _parse_stackup_specs_from_board_text,
     _replace_or_append_child_block,
@@ -143,3 +145,81 @@ def test_netlist_parser_and_non_cluster_placement_strategies(
     assert linear["J1"][0] <= linear["U1"][0] <= linear["U2"][0]
     assert star["J1"] == (50.0, 40.0)
     assert star["U1"] != star["U2"]
+
+
+def test_matches_layer_filter_name_handles_alias_forms() -> None:
+    # The headless variant of the layer filter takes a layer NAME string
+    # (as parsed from a .kicad_pcb block) rather than an integer enum, so
+    # it has to normalise alias forms ('F.Cu' / 'F_Cu' / 'F-Cu') before
+    # comparing. An empty filter matches everything; mismatched layers
+    # filter out.
+    assert _matches_layer_filter_name("F.Cu", "") is True
+    assert _matches_layer_filter_name("F.Cu", "F_Cu") is True
+    assert _matches_layer_filter_name("F.Cu", "F.Cu") is True
+    assert _matches_layer_filter_name("F.Cu", "B_Cu") is False
+    assert _matches_layer_filter_name("In1.Cu", "In1_Cu") is True
+
+
+def test_pad_net_clause_regex_matches_both_kicad_format_versions() -> None:
+    # The headless ``pcb_get_pads`` path uses this regex to extract the net
+    # name from a pad block. Active KiCad 10 boards may contain EITHER
+    # format depending on when the project was first written; the wire
+    # harness production board uses the legacy form, the junction-passive
+    # board uses the new form. The regex must handle both.
+    import re
+
+    net_pat = re.compile(r"\(net\s+(?:\d+\s+)?\"([^\"]+)\"\)")
+
+    new_form = '(pad "1" smd rect (at 0 0) (size 1 1) (net "/GND_RTN"))'
+    legacy_form = '(pad "1" smd rect (at 0 0) (size 1 1) (net 12 "/SIGNAL"))'
+    no_net = '(pad "1" smd rect (at 0 0) (size 1 1))'
+
+    new_match = net_pat.search(new_form)
+    legacy_match = net_pat.search(legacy_form)
+    assert new_match is not None and new_match.group(1) == "/GND_RTN"
+    assert legacy_match is not None and legacy_match.group(1) == "/SIGNAL"
+    assert net_pat.search(no_net) is None
+
+
+def test_parse_board_footprint_blocks_extracts_pads_with_both_net_formats() -> None:
+    # Validates that the block-capture parser preserves both net-clause
+    # forms verbatim so the downstream pad-net regex can run against them.
+    board_text = "\n".join(
+        [
+            "(kicad_pcb",
+            "\t(version 20250216)",
+            '\t(generator "pytest")',
+            '\t(footprint "Resistor_SMD:R_0805"',
+            '\t\t(layer "F.Cu")',
+            '\t\t(uuid "1111")',
+            "\t\t(at 10 20 0)",
+            '\t\t(property "Reference" "R1"',
+            "\t\t\t(at 0 -1.5 0)",
+            "\t\t)",
+            '\t\t(property "Value" "10k"',
+            "\t\t\t(at 0 1.5 0)",
+            "\t\t)",
+            '\t\t(pad "1" smd rect (at -0.7 0) (size 1 1)',
+            '\t\t\t(layers "F.Cu" "F.Mask" "F.Paste")',
+            '\t\t\t(net "/GND")',
+            "\t\t)",
+            '\t\t(pad "2" smd rect (at 0.7 0) (size 1 1)',
+            '\t\t\t(layers "F.Cu" "F.Mask" "F.Paste")',
+            '\t\t\t(net 12 "/SIGNAL")',
+            "\t\t)",
+            "\t)",
+            ")",
+            "",
+        ]
+    )
+
+    parsed = _parse_board_footprint_blocks(board_text)
+    assert "R1" in parsed
+    block = str(parsed["R1"]["block"])
+    # Both net clauses survive intact in the captured block — the pad-net
+    # regex used by pcb_get_pads must match either form to populate the
+    # net column when reading older boards.
+    assert '(net "/GND")' in block
+    assert '(net 12 "/SIGNAL")' in block
+    assert parsed["R1"]["value"] == "10k"
+    assert parsed["R1"]["layer_name"] == "F.Cu"

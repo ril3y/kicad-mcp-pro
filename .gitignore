@@ -82,3 +82,8 @@ sbom.spdx
 requirements-audit.txt
 requirements-build.txt
 .scan-results/
+
+# Local fork-private files (do not push upstream)
+.scratch/
+CLAUDE.md
+.mcp.json
