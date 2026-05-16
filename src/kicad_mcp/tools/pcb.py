@@ -1763,6 +1763,14 @@ def _render_board_footprint_block(
         block,
         count=1,
     )
+    # Stand-alone .kicad_mod libraries ship deterministic UUIDs on every
+    # pad and graphic element. Embedding the same library file twice
+    # (e.g. two SOT-23 instances) without re-rolling these would have
+    # the new footprints sharing UUIDs with each other — pcbnew accepts
+    # it, but every UUID-keyed downstream tool (selections, change-
+    # tracking, IPC referents) silently breaks. Roll fresh UUIDs for
+    # every element.
+    block = _refresh_uuid_fields(block)
     block = _replace_property_value(block, "Reference", reference)
     block = _replace_property_value(block, "Value", value)
     block = _assign_pad_nets(block, pad_nets)
@@ -3536,20 +3544,56 @@ def register(mcp: FastMCP) -> None:
         skipped_additions: list[tuple[str, str]] = []  # (ref, reason)
         replacements: dict[str, str] = {}
 
+        # Track every footprint position (existing + newly-placed) so we
+        # don't drop a new footprint on top of an existing one. The
+        # naive 8-column grid the audit flagged as a P1 hazard would put
+        # the first new component at (origin_x_mm, origin_y_mm) blindly,
+        # colliding with whatever the user has there.
+        occupied_centers: list[tuple[float, float]] = [
+            (float(info["x_mm"]), float(info["y_mm"]))
+            for info in pcb_footprints.values()
+            if info.get("x_mm") is not None and info.get("y_mm") is not None
+        ]
+        collision_radius_mm = grid_mm * 4.0
+
+        def _next_clear_grid_slot(start_index: int) -> tuple[float, float, int]:
+            """Walk the 8-column grid starting at ``start_index`` until
+            we find a (x, y) at least ``collision_radius_mm`` from every
+            currently-occupied center. Returns ``(x, y, next_index)``."""
+            slot = start_index
+            for _ in range(start_index, start_index + 512):
+                col = slot % 8
+                row = slot // 8
+                x = origin_x_mm + col * grid_mm * 8.0
+                y = origin_y_mm + row * grid_mm * 8.0
+                if all(
+                    (x - cx) ** 2 + (y - cy) ** 2 >= collision_radius_mm ** 2
+                    for cx, cy in occupied_centers
+                ):
+                    return x, y, slot + 1
+                slot += 1
+            # Fallback: 512 slots was enough to wrap several times; if
+            # we still haven't found one, just take whatever's next.
+            col = slot % 8
+            row = slot // 8
+            return (
+                origin_x_mm + col * grid_mm * 8.0,
+                origin_y_mm + row * grid_mm * 8.0,
+                slot + 1,
+            )
+
         # ---- Additions ----
         cap_additions = cast(list[str], diff["additions"])
-        # Simple grid placement: 8 columns, then wrap
-        for index, ref in enumerate(cap_additions):
+        grid_slot = 0
+        for ref in cap_additions:
             info = nl_components.get(ref, {})
             footprint_assignment = info.get("footprint", "")
             value = info.get("value", "")
             if not footprint_assignment:
                 skipped_additions.append((ref, "no footprint assigned in schematic"))
                 continue
-            col = index % 8
-            row = index // 8
-            x = origin_x_mm + col * grid_mm * 8.0
-            y = origin_y_mm + row * grid_mm * 8.0
+            x, y, grid_slot = _next_clear_grid_slot(grid_slot)
+            occupied_centers.append((x, y))
             pad_nets = {pin: net for (r, pin), net in nl_pad_nets.items() if r == ref}
             try:
                 block = _render_board_footprint_block(
