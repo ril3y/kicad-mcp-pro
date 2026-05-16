@@ -3206,41 +3206,55 @@ def _symbol_connection_points(parsed: dict[str, Any]) -> set[tuple[float, float]
 
 
 def _reload_schematic_via_ipc() -> str:
+    """Persist confirmation + best-effort live KiCad UI refresh.
+
+    All return strings mean the .kicad_sch file is already written. They
+    differ only in whether KiCad's open schematic editor was refreshed.
+    """
+    SAVED_NO_KICAD = (
+        "Saved. KiCad isn't running for a live refresh — "
+        "open the schematic to see the change."
+    )
+    SAVED_NO_DOC = "Saved. No schematic is open in KiCad — open it to see the change."
+    SAVED_REFRESH_FAILED = (
+        "Saved. Live refresh request failed; reload manually in KiCad."
+    )
+
     try:
         from google.protobuf.empty_pb2 import Empty  # type: ignore[import-untyped]
         from kipy.proto.common.commands import editor_commands_pb2
         from kipy.proto.common.types.base_types_pb2 import DocumentType
     except Exception as exc:
         logger.debug("schematic_reload_import_unavailable", error=str(exc))
-        return "The schematic was updated. Reload it manually in KiCad if needed."
+        return SAVED_NO_KICAD
 
     try:
         kicad = get_kicad()
-    except KiCadConnectionError:
-        return "The schematic was updated. KiCad is not connected, so reload it manually."
+    except KiCadConnectionError as exc:
+        logger.debug("schematic_reload_no_ipc", error=str(exc))
+        return SAVED_NO_KICAD
 
     try:
         documents = kicad.get_open_documents(DocumentType.DOCTYPE_SCHEMATIC)
         if not documents:
-            return "The schematic was updated. No open KiCad schematic was found to reload."
+            return SAVED_NO_DOC
         command = editor_commands_pb2.RevertDocument()
         command.document.CopyFrom(documents[0])
         # kipy's send() expects ``Empty`` for fire-and-forget commands like
-        # RevertDocument — see kipy/board.py::Board.revert which does the
-        # same thing on the PCB side. Earlier we passed ``NoneType`` here
-        # which silently failed inside kipy's protobuf deserialization, so
-        # eeschema never saw the reload request and the user had to
-        # alt-tab away/back to trigger KiCad's external-modify detector.
-        # (Use kicad._client.send because mypy's stub for KiCad omits the
-        # public ``send`` method.)
+        # RevertDocument — see kipy/board.py::Board.revert on the PCB
+        # side. Earlier we passed ``NoneType`` here which silently failed
+        # inside kipy's protobuf deserialization, so eeschema never saw the
+        # request. (kicad._client.send because mypy's KiCad stub omits send.)
         kicad._client.send(command, Empty)
-        return "The schematic was updated and KiCad was asked to reload it."
     except Exception as exc:
-        logger.debug("schematic_reload_failed", error=str(exc))
-        return (
-            f"The schematic was updated. Reload it manually in KiCad if needed. "
-            f"[debug: {type(exc).__name__}: {exc}]"
+        logger.warning(
+            "schematic_reload_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
         )
+        return SAVED_REFRESH_FAILED
+
+    return "Saved. KiCad refreshed."
 
 
 def _reload_schematic() -> str:
