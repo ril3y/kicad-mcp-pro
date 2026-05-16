@@ -3302,19 +3302,37 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def pcb_diff_from_netlist() -> str:
-        """Report what F8 (Update PCB from Schematic) would change, headlessly.
+    def pcb_diff_from_netlist(
+        apply: bool = False,
+        origin_x_mm: float = 20.0,
+        origin_y_mm: float = 20.0,
+        grid_mm: float = 2.54,
+    ) -> str:
+        """Report (and optionally apply) what F8 would change, headlessly.
 
-        Read-only. Drives the netlist generation via ``kicad-cli sch
-        export netlist`` (file-based), then diffs against the .kicad_pcb
-        on disk. Bypasses pcbnew's in-process eeschema loader entirely —
-        the result is identical whether KiCad's GUI is open or closed.
+        Drives netlist generation via ``kicad-cli sch export netlist``
+        (file-based), then diffs against the .kicad_pcb on disk. Bypasses
+        pcbnew's in-process eeschema loader entirely — result is the
+        same whether KiCad's GUI is open or closed.
 
-        Use this to verify a schematic→PCB sync without invoking the
-        modal F8 dialog (which holds pcbnew hostage and only surfaces
-        errors via a UI). The reported diff shows footprints that would
-        be added, removed, or have their footprint name changed, plus
-        pad-level net reassignments.
+        ``apply=False`` (default): read-only diff report.
+        ``apply=True``: mutate the .kicad_pcb file:
+          - Adds missing footprints with pad-level net assignments from
+            the netlist. New footprints are auto-placed on a grid
+            starting at (origin_x_mm, origin_y_mm); move them in pcbnew
+            afterwards.
+          - Rewrites pad nets on existing footprints when the netlist
+            disagrees with the current board (stale assignments from an
+            earlier botched sync).
+          - Does NOT remove orphan footprints or change footprint names
+            on mismatches — those need an explicit confirmation flow.
+            Use pcb_sync_from_schematic(replace_mismatched=True) for
+            footprint renames; remove orphans manually.
+
+        Returns a report listing applied additions, applied net rewrites,
+        and any skipped operations (e.g. footprints whose library lookup
+        failed — those need ``kicad_common.json``'s env var pointing at
+        the right ``.pretty`` directory).
         """
         cfg = get_config()
         if cfg.sch_file is None or not cfg.sch_file.exists():
@@ -3336,12 +3354,110 @@ def register(mcp: FastMCP) -> None:
         nl_components, nl_nets = _parse_kicadsexpr_netlist(netlist_text)
         pcb_text = pcb_path.read_text(encoding="utf-8")
         pcb_footprints = _parse_board_footprint_blocks(pcb_text)
-
         diff = _diff_pcb_against_netlist(nl_components, nl_nets, pcb_footprints)
-        warn = ""
+
+        report_header = ""
         if msg:
-            warn = f"kicad-cli output: {msg}\n\n"
-        return warn + _format_pcb_netlist_diff_report(diff, nl_components)
+            report_header = f"kicad-cli output: {msg}\n\n"
+
+        if not apply:
+            return report_header + _format_pcb_netlist_diff_report(diff, nl_components) + (
+                "\n\nRe-run with apply=True to write these changes into the .kicad_pcb."
+            )
+
+        # Build (ref, pin) -> net_name map for pad rewrites
+        nl_pad_nets: dict[tuple[str, str], str] = {}
+        for net_name, nodes in nl_nets.items():
+            for ref, pin in nodes:
+                nl_pad_nets[(ref, pin)] = net_name
+
+        additions_to_apply: list[str] = []
+        skipped_additions: list[tuple[str, str]] = []  # (ref, reason)
+        replacements: dict[str, str] = {}
+
+        # ---- Additions ----
+        cap_additions = cast(list[str], diff["additions"])
+        # Simple grid placement: 8 columns, then wrap
+        for index, ref in enumerate(cap_additions):
+            info = nl_components.get(ref, {})
+            footprint_assignment = info.get("footprint", "")
+            value = info.get("value", "")
+            if not footprint_assignment:
+                skipped_additions.append((ref, "no footprint assigned in schematic"))
+                continue
+            col = index % 8
+            row = index // 8
+            x = origin_x_mm + col * grid_mm * 8.0
+            y = origin_y_mm + row * grid_mm * 8.0
+            pad_nets = {pin: net for (r, pin), net in nl_pad_nets.items() if r == ref}
+            try:
+                block = _render_board_footprint_block(
+                    footprint_assignment,
+                    reference=ref,
+                    value=value,
+                    x_mm=x,
+                    y_mm=y,
+                    rotation=0,
+                    pad_nets=pad_nets,
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                skipped_additions.append((ref, f"{type(exc).__name__}: {exc}"))
+                continue
+            additions_to_apply.append(block)
+
+        # ---- Net changes on existing footprints ----
+        # Group net changes by reference so we update each footprint once.
+        changes_by_ref: dict[str, dict[str, str]] = {}
+        for ref, pin, _old, new in cast(list[tuple[str, str, str, str]], diff["net_changes"]):
+            changes_by_ref.setdefault(ref, {})[pin] = new
+        for ref, pad_changes in changes_by_ref.items():
+            existing = pcb_footprints.get(ref)
+            if existing is None:
+                # Shouldn't happen — net_changes are scoped to existing refs.
+                continue
+            new_block = _assign_pad_nets(str(existing["block"]), pad_changes)
+            replacements[ref] = new_block
+
+        applied_anything = bool(additions_to_apply or replacements)
+        if applied_anything:
+            _transactional_board_write(
+                lambda current: _replace_board_blocks(current, replacements, additions_to_apply)
+            )
+
+        # ---- Report ----
+        out_lines = [report_header.rstrip(), "Headless F8 apply summary:"]
+        out_lines.append(f"  Footprints added: {len(additions_to_apply)}")
+        for ref in cap_additions:
+            if ref not in {r for r, _ in skipped_additions}:
+                fp = nl_components.get(ref, {}).get("footprint", "")
+                out_lines.append(f"    + {ref:8s} {fp}")
+        if skipped_additions:
+            out_lines.append(f"  Additions skipped: {len(skipped_additions)}")
+            for ref, reason in skipped_additions[:30]:
+                out_lines.append(f"    ! {ref:8s} {reason}")
+            if len(skipped_additions) > 30:
+                out_lines.append(f"    ... and {len(skipped_additions) - 30} more")
+        out_lines.append(f"  Existing footprints with pad-net rewrites: {len(replacements)}")
+        for ref in sorted(replacements):
+            changed_pads = changes_by_ref[ref]
+            pin_summary = ", ".join(f"{pin}->{net}" for pin, net in sorted(changed_pads.items())[:4])
+            if len(changed_pads) > 4:
+                pin_summary += f", +{len(changed_pads) - 4} more"
+            out_lines.append(f"    ~ {ref}: {pin_summary}")
+        if cast(list[str], diff["removals"]):
+            out_lines.append(
+                f"  Not handled: {len(cast(list[str], diff['removals']))} orphan footprint(s) "
+                "on the PCB (use pcbnew to remove or call a future apply-mode flag)."
+            )
+        if cast(list[Any], diff["footprint_mismatches"]):
+            out_lines.append(
+                f"  Not handled: {len(cast(list[Any], diff['footprint_mismatches']))} "
+                "footprint name mismatch(es). Use pcb_sync_from_schematic("
+                "replace_mismatched=True)."
+            )
+        if not applied_anything:
+            out_lines.append("  (no changes applied)")
+        return "\n".join(out_lines)
 
     @mcp.tool()
     @headless_compatible

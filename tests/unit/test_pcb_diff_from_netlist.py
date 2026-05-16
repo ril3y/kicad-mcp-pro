@@ -207,6 +207,115 @@ def test_diff_ignores_net_changes_for_refs_not_on_pcb() -> None:
     assert diff["net_changes"] == []
 
 
+def test_apply_mode_writes_pad_net_rewrites_to_existing_footprints(
+    monkeypatch: Any, tmp_path: Any,
+) -> None:
+    """The apply path must invoke ``_assign_pad_nets`` on a footprint whose
+    pad-net assignments disagree with the netlist, then hand the rewritten
+    block to ``_replace_board_blocks`` for atomic write. This is the
+    junction-passive use case: existing footprints with stale net codes
+    from a botched earlier sync get re-routed in place.
+    """
+    import re
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from kicad_mcp.server import build_server
+    from tests.conftest import call_tool_text
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    pcb_file = project_dir / "test.kicad_pcb"
+    sch_file = project_dir / "test.kicad_sch"
+    output_dir = project_dir / "output"
+
+    # Minimal .kicad_pcb with one footprint J1 whose pad 2 is currently on
+    # /+12V_PWR. The netlist (synth) will say it should be /GND_RTN.
+    pcb_file.write_text(
+        '(kicad_pcb (version 20240108) (generator "test") (generator_version "10.0")\n'
+        '\t(footprint "Test:Conn"\n'
+        '\t\t(layer "F.Cu")\n'
+        '\t\t(uuid "11111111-2222-3333-4444-555555555555")\n'
+        '\t\t(at 50 50 0)\n'
+        '\t\t(property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS"))\n'
+        '\t\t(property "Value" "Conn" (at 0 2 0) (layer "F.Fab"))\n'
+        '\t\t(pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) '
+        '(layers "*.Cu" "*.Mask") (net 1 "/+12V_PWR"))\n'
+        '\t\t(pad "2" thru_hole circle (at 2.54 0) (size 1.5 1.5) (drill 0.8) '
+        '(layers "*.Cu" "*.Mask") (net 1 "/+12V_PWR"))\n'
+        "\t)\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    sch_file.write_text("(kicad_sch)\n", encoding="utf-8")
+    output_dir.mkdir()
+
+    # Synthetic netlist contents that kicad-cli would have produced
+    synthetic_netlist = (
+        '(export (version "E")\n'
+        '\t(components\n'
+        '\t\t(comp (ref "J1") (value "Conn") (footprint "Test:Conn")))\n'
+        '\t(nets\n'
+        '\t\t(net (code "1") (name "/+12V_PWR")\n'
+        '\t\t\t(node (ref "J1") (pin "1")))\n'
+        '\t\t(net (code "2") (name "/GND_RTN")\n'
+        '\t\t\t(node (ref "J1") (pin "2")))))\n'
+    )
+
+    fake_cfg = SimpleNamespace(
+        sch_file=sch_file,
+        pcb_file=pcb_file,
+        project_dir=project_dir,
+        output_dir=output_dir,
+        kicad_cli=Path("kicad-cli-stub"),
+        cli_timeout=30,
+        footprint_library_dir=None,
+        ensure_output_dir=lambda subdir=None: (
+            output_dir / subdir if subdir else output_dir
+        ).resolve() if False else _ensure_subdir(output_dir, subdir),
+    )
+
+    def _ensure_subdir(base: Path, subdir: str | None) -> Path:
+        target = base / subdir if subdir else base
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    fake_cfg.ensure_output_dir = lambda subdir=None: _ensure_subdir(output_dir, subdir)
+
+    # Stub out the kicad-cli invocation: write the synthetic netlist where
+    # the tool expects it, return success.
+    def fake_run(_sch: Path, out: Path) -> tuple[int, str]:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(synthetic_netlist, encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr("kicad_mcp.tools.pcb.get_config", lambda: fake_cfg)
+    monkeypatch.setattr("kicad_mcp.tools.pcb._run_kicad_cli_netlist_export", fake_run)
+    # Make pcb path resolution use our fake cfg
+    monkeypatch.setattr("kicad_mcp.tools.pcb._get_pcb_file_for_sync", lambda: pcb_file)
+
+    # Apply mode
+    import asyncio
+    server = build_server("full")
+    result_text = asyncio.run(
+        call_tool_text(server, "pcb_diff_from_netlist", {"apply": True})
+    )
+
+    assert "Headless F8 apply summary" in result_text
+    assert "Existing footprints with pad-net rewrites: 1" in result_text
+    assert "J1: 2->/GND_RTN" in result_text
+
+    # The .kicad_pcb on disk should now have pad 2 on /GND_RTN
+    updated = pcb_file.read_text(encoding="utf-8")
+    # Pad 1 stays on /+12V_PWR; pad 2 should now reference /GND_RTN
+    pad2_block = re.search(r'\(pad\s+"2".*?\n\s*\)', updated, re.DOTALL)
+    assert pad2_block is not None
+    assert "/GND_RTN" in pad2_block.group(0)
+    pad1_block = re.search(r'\(pad\s+"1".*?\n\s*\)', updated, re.DOTALL)
+    assert pad1_block is not None
+    assert "/+12V_PWR" in pad1_block.group(0)
+
+
 def test_format_diff_report_caps_long_sections_with_summary() -> None:
     """The report goes back to the agent over MCP; a giant board would
     bloat the context window. Sections are capped at 30/40 lines with
