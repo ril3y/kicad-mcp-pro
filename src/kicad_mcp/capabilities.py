@@ -160,6 +160,16 @@ _register_many(
 
 _register_many(
     [
+        "pcb_diff_from_netlist",
+    ],
+    profiles=_PCB_PROFILES,
+    tier=AccessTier.READ,
+    runtime=RuntimeRequirement.KICAD_CLI,
+    verification_level="verified",
+)
+
+_register_many(
+    [
         "pcb_add_footprint",
         "pcb_move_footprint",
         "pcb_sync_from_schematic",

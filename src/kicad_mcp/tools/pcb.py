@@ -1861,6 +1861,198 @@ def _planned_board_positions(
     return positions
 
 
+# ---------------------------------------------------------------------------
+# Headless "Update PCB from Schematic" (the F8 menu action) — file-based
+# implementation that bypasses pcbnew's in-process eeschema loader. We
+# generate the netlist with ``kicad-cli sch export netlist`` and compare it
+# against the .kicad_pcb on disk, so the result is identical regardless of
+# whether KiCad's GUI is open (and immune to its in-memory caching).
+#
+# The legacy ``_parse_netlist_text`` parser above expects the older
+# single-line node form (``(node (ref "X") (pin "Y"))``) and silently
+# returns an empty map against KiCad 10's actual multi-line output. The
+# helpers below balance-extract each block so they cope with either layout.
+# ---------------------------------------------------------------------------
+
+
+def _run_kicad_cli_netlist_export(sch_path: Path, out_path: Path) -> tuple[int, str]:
+    """Run ``kicad-cli sch export netlist --format kicadsexpr``.
+
+    Returns ``(returncode, combined_stdout_stderr)``. Tries the modern
+    positional-input form first; falls back to the older ``--input`` form
+    if the positional one is rejected (older kicad-cli builds shipped both
+    spellings during the 9.0/10.0 transition).
+    """
+    cfg = get_config()
+    if not cfg.kicad_cli.exists():
+        return -1, "kicad-cli binary is not available."
+    variants = [
+        [
+            "sch", "export", "netlist",
+            "--format", "kicadsexpr",
+            "--output", str(out_path),
+            str(sch_path),
+        ],
+        [
+            "sch", "export", "netlist",
+            "--format", "kicadsexpr",
+            "--input", str(sch_path),
+            "--output", str(out_path),
+        ],
+    ]
+    last_msg = "unknown error"
+    for variant in variants:
+        try:
+            result = subprocess.run(
+                [str(cfg.kicad_cli), *variant],
+                capture_output=True, text=True, timeout=cfg.cli_timeout, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_msg = f"{type(exc).__name__}: {exc}"
+            continue
+        if result.returncode == 0 and out_path.exists():
+            return 0, (result.stdout + result.stderr).strip()
+        last_msg = (result.stderr or result.stdout or "kicad-cli failed").strip()
+    return 1, last_msg
+
+
+def _parse_kicadsexpr_netlist(
+    text: str,
+) -> tuple[dict[str, dict[str, str]], dict[str, list[tuple[str, str]]]]:
+    """Parse a ``kicadsexpr``-format netlist into components + nets.
+
+    Returns ``(components_by_ref, nets_by_name)`` where:
+      - ``components_by_ref[ref]`` → ``{"value": ..., "footprint": ...}``
+      - ``nets_by_name[net]`` → ``[(ref, pin), ...]``
+
+    Robust against both single-line and multi-line node serializations
+    (KiCad 10's kicad-cli emits multi-line — `(node\\n\\t(ref ...)`).
+    """
+    components: dict[str, dict[str, str]] = {}
+    for m in re.finditer(r"\(comp\s", text):
+        block, _ = _extract_block(text, m.start())
+        ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", block)
+        if not ref_m or not ref_m.group(1):
+            continue
+        ref = ref_m.group(1)
+        value_m = re.search(rf"\(value\s+{STRING_PATTERN}\)", block)
+        fp_m = re.search(rf"\(footprint\s+{STRING_PATTERN}\)", block)
+        components[ref] = {
+            "value": value_m.group(1) if value_m else "",
+            "footprint": fp_m.group(1) if fp_m else "",
+        }
+
+    nets: dict[str, list[tuple[str, str]]] = {}
+    for m in re.finditer(r"\(net\s+\(code\s", text):
+        block, _ = _extract_block(text, m.start())
+        name_m = re.search(rf"\(name\s+{STRING_PATTERN}\)", block)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        nodes: list[tuple[str, str]] = []
+        for nm in re.finditer(r"\(node\s", block):
+            node_block, _ = _extract_block(block, nm.start())
+            ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", node_block)
+            pin_m = re.search(rf"\(pin\s+{STRING_PATTERN}\)", node_block)
+            if ref_m and pin_m and ref_m.group(1) and pin_m.group(1):
+                nodes.append((ref_m.group(1), pin_m.group(1)))
+        nets[name] = nodes
+    return components, nets
+
+
+def _diff_pcb_against_netlist(
+    nl_components: dict[str, dict[str, str]],
+    nl_nets: dict[str, list[tuple[str, str]]],
+    pcb_footprints: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute what an Update-PCB-from-Schematic would change.
+
+    Outputs a structured diff:
+      - ``additions``: schematic refs not on the PCB (need to be placed)
+      - ``removals``: PCB refs not in the schematic (would be deleted)
+      - ``footprint_mismatches``: same ref, different footprint name
+      - ``net_changes``: pad-level net reassignments on existing footprints
+    """
+    nl_refs = set(nl_components)
+    pcb_refs = set(pcb_footprints)
+    additions = sorted(nl_refs - pcb_refs)
+    removals = sorted(pcb_refs - nl_refs)
+    common = nl_refs & pcb_refs
+
+    footprint_mismatches: list[tuple[str, str, str]] = []
+    for ref in sorted(common):
+        nl_fp = nl_components[ref]["footprint"]
+        pcb_fp = str(pcb_footprints[ref].get("name", ""))
+        if nl_fp and pcb_fp and nl_fp != pcb_fp:
+            footprint_mismatches.append((ref, pcb_fp, nl_fp))
+
+    # Flatten netlist nodes to (ref, pin) -> net
+    nl_pad_nets: dict[tuple[str, str], str] = {}
+    for net_name, nodes in nl_nets.items():
+        for ref, pin in nodes:
+            nl_pad_nets[(ref, pin)] = net_name
+
+    net_changes: list[tuple[str, str, str, str]] = []
+    for (ref, pin), nl_net in nl_pad_nets.items():
+        if ref not in pcb_footprints:
+            continue
+        pcb_pad_nets = cast(dict[str, str], pcb_footprints[ref].get("pad_nets", {}))
+        pcb_net = pcb_pad_nets.get(pin, "")
+        if pcb_net != nl_net:
+            net_changes.append((ref, pin, pcb_net, nl_net))
+    net_changes.sort()
+
+    return {
+        "additions": additions,
+        "removals": removals,
+        "footprint_mismatches": footprint_mismatches,
+        "net_changes": net_changes,
+    }
+
+
+def _format_pcb_netlist_diff_report(
+    diff: dict[str, Any],
+    nl_components: dict[str, dict[str, str]],
+) -> str:
+    """Render a structured diff into a human-readable report for the MCP
+    response. Caps each section so a giant board doesn't blow the context
+    window — first 30 entries shown, count + "and N more" beyond that."""
+    additions = cast(list[str], diff["additions"])
+    removals = cast(list[str], diff["removals"])
+    footprint_mismatches = cast(list[tuple[str, str, str]], diff["footprint_mismatches"])
+    net_changes = cast(list[tuple[str, str, str, str]], diff["net_changes"])
+
+    lines: list[str] = ["Headless F8 (Update PCB from Schematic) diff:"]
+
+    lines.append(f"  Add to PCB: {len(additions)} footprint(s)")
+    for ref in additions[:30]:
+        info = nl_components.get(ref, {})
+        lines.append(f"    + {ref:8s} {info.get('footprint',''):42s} value={info.get('value','')}")
+    if len(additions) > 30:
+        lines.append(f"    ... and {len(additions) - 30} more")
+
+    lines.append(f"  Remove from PCB: {len(removals)} footprint(s)")
+    for ref in removals[:30]:
+        lines.append(f"    - {ref}")
+    if len(removals) > 30:
+        lines.append(f"    ... and {len(removals) - 30} more")
+
+    lines.append(f"  Footprint mismatches: {len(footprint_mismatches)}")
+    for ref, pcb_fp, nl_fp in footprint_mismatches[:30]:
+        lines.append(f"    ~ {ref}: {pcb_fp} -> {nl_fp}")
+    if len(footprint_mismatches) > 30:
+        lines.append(f"    ... and {len(footprint_mismatches) - 30} more")
+
+    lines.append(f"  Net changes on existing pads: {len(net_changes)}")
+    for ref, pin, pcb_net, nl_net in net_changes[:40]:
+        old = pcb_net or "(none)"
+        lines.append(f"    {ref}.{pin}: {old} -> {nl_net}")
+    if len(net_changes) > 40:
+        lines.append(f"    ... and {len(net_changes) - 40} more")
+
+    return "\n".join(lines)
+
+
 def register(mcp: FastMCP) -> None:
     """Register PCB tools."""
 
@@ -3107,6 +3299,49 @@ def register(mcp: FastMCP) -> None:
             f"Added {shape_type} inner-layer graphic to footprint '{reference}' "
             f"on {canonical_layer}."
         )
+
+    @mcp.tool()
+    @headless_compatible
+    def pcb_diff_from_netlist() -> str:
+        """Report what F8 (Update PCB from Schematic) would change, headlessly.
+
+        Read-only. Drives the netlist generation via ``kicad-cli sch
+        export netlist`` (file-based), then diffs against the .kicad_pcb
+        on disk. Bypasses pcbnew's in-process eeschema loader entirely —
+        the result is identical whether KiCad's GUI is open or closed.
+
+        Use this to verify a schematic→PCB sync without invoking the
+        modal F8 dialog (which holds pcbnew hostage and only surfaces
+        errors via a UI). The reported diff shows footprints that would
+        be added, removed, or have their footprint name changed, plus
+        pad-level net reassignments.
+        """
+        cfg = get_config()
+        if cfg.sch_file is None or not cfg.sch_file.exists():
+            return (
+                "No schematic file is configured. "
+                "Call kicad_set_project() or set KICAD_MCP_SCH_FILE."
+            )
+        pcb_path = _get_pcb_file_for_sync()
+        out_dir = cfg.ensure_output_dir("netlist")
+        netlist_out = out_dir / "pcb_diff.net"
+        code, msg = _run_kicad_cli_netlist_export(cfg.sch_file, netlist_out)
+        if code != 0:
+            return (
+                f"Netlist generation failed (kicad-cli exit {code}): {msg}\n"
+                "This is the same parsing path F8 would use, so F8 would also fail."
+            )
+
+        netlist_text = netlist_out.read_text(encoding="utf-8")
+        nl_components, nl_nets = _parse_kicadsexpr_netlist(netlist_text)
+        pcb_text = pcb_path.read_text(encoding="utf-8")
+        pcb_footprints = _parse_board_footprint_blocks(pcb_text)
+
+        diff = _diff_pcb_against_netlist(nl_components, nl_nets, pcb_footprints)
+        warn = ""
+        if msg:
+            warn = f"kicad-cli output: {msg}\n\n"
+        return warn + _format_pcb_netlist_diff_report(diff, nl_components)
 
     @mcp.tool()
     @headless_compatible
