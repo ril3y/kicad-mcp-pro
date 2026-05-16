@@ -1,6 +1,6 @@
 # KiCad MCP Pro Server
 
-<!-- mcp-name: io.github.oaslananka/kicad-mcp-pro -->
+<!-- mcp-name: io.github.oaslananka-lab/kicad-mcp-pro -->
 
 [![PyPI](https://img.shields.io/pypi/v/kicad-mcp-pro.svg)](https://pypi.org/project/kicad-mcp-pro/)
 [![CI](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/ci.yml)
