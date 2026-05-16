@@ -31,6 +31,7 @@ from kipy.proto.common import types as common_types
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
+from ..discovery import find_kicad_user_env_vars
 from ..connection import (
     PERSISTENCE_HINT as _PERSISTENCE_HINT,
 )
@@ -1452,6 +1453,27 @@ def _inner_layer_graphic_block(
     raise ValueError("shape_type must be one of: line, rect, text.")
 
 
+def _expand_kicad_lib_uri(uri: str, project_dir: Path | None) -> str:
+    """Expand KiCad-style ``${VAR}`` placeholders in an ``fp-lib-table`` URI.
+
+    Substitutes:
+      - ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> project_dir
+      - user-defined vars from ``kicad_common.json::environment.vars``
+        (e.g. ``${EASYEDA2KICAD}``, ``${MY_LIBS}``). KiCad itself only
+        injects these when the GUI is running; the MCP server process
+        does not inherit them, so we read them out of the config file.
+
+    Unknown placeholders are left intact so the caller's ``exists()`` probe
+    fails loudly rather than dispatching to a partially-substituted path.
+    """
+    if project_dir is not None:
+        uri = uri.replace("${KIPRJMOD}", str(project_dir))
+        uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    for key, value in find_kicad_user_env_vars().items():
+        uri = uri.replace("${" + key + "}", value)
+    return uri
+
+
 def _footprint_file(library: str, footprint: str) -> Path:
     """Resolve a ``Library:Footprint`` reference to a ``.kicad_mod`` path.
 
@@ -1461,10 +1483,11 @@ def _footprint_file(library: str, footprint: str) -> Path:
     through KiCad's GUI library resolver. KiCad's S-expression
     ``fp-lib-table`` carries entries of the form
     ``(lib (name "x") (type "KiCad") (uri "${KIPRJMOD}/foo.pretty") ...)``
-    — we parse the ``name`` / ``uri`` pair, expand the standard project
-    variables (``${KIPRJMOD}`` and ``${KICAD_PROJECT_DIR}``), and probe the
-    candidate ``.kicad_mod`` file. Falls through to the global directory if
-    the table is missing, the entry is absent, or the candidate doesn't
+    or ``(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") ...)`` — we parse
+    the ``name`` / ``uri`` pair, expand both the standard project variables
+    AND user-defined env vars from ``kicad_common.json``, then probe the
+    candidate ``.kicad_mod`` file. Falls through to the global directory
+    if the table is missing, the entry is absent, or the candidate doesn't
     exist on disk — preserves the legacy single-source behavior.
     """
     cfg = get_config()
@@ -1483,10 +1506,8 @@ def _footprint_file(library: str, footprint: str) -> Path:
             )
             match = entry_pattern.search(table_text)
             if match:
-                uri = match.group(1)
-                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
-                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
-                candidate = Path(uri) / f"{footprint}.kicad_mod"
+                expanded = _expand_kicad_lib_uri(match.group(1), cfg.project_dir)
+                candidate = Path(expanded) / f"{footprint}.kicad_mod"
                 if candidate.exists():
                     return candidate
     if cfg.footprint_library_dir is None or not cfg.footprint_library_dir.exists():

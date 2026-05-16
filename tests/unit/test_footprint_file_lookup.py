@@ -278,6 +278,152 @@ def test_footprint_file_picks_correct_entry_among_multiple_libraries(
     assert resolved == target_pretty / "WANTED.kicad_mod"
 
 
+def test_footprint_file_expands_user_env_var_from_kicad_common(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-defined env vars (KiCad ``Preferences > Configure Paths``) live
+    in ``kicad_common.json::environment.vars`` — NOT in the OS environment.
+    The MCP server process must read them out of the config file before
+    expanding ``${EASYEDA2KICAD}`` and friends in ``fp-lib-table`` URIs,
+    otherwise headless flows fail with ``Footprint '...' was not found``
+    even when the file exists on disk. This was the junction-passive
+    repro: ``easyeda2kicad:CONN-TH_9-6437287-8`` raised FileNotFoundError
+    despite the file being present at ``${EASYEDA2KICAD}/...``.
+    """
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    # 1. The footprint lives under a directory referenced by a user env var.
+    libroot = tmp_path / "external_libs"
+    pretty_dir = libroot / "easyeda2kicad.pretty"
+    pretty_dir.mkdir(parents=True)
+    (pretty_dir / "CONN-TH_9-6437287-8.kicad_mod").write_text(
+        _FAKE_KICAD_MOD, encoding="utf-8"
+    )
+
+    # 2. Build a project whose fp-lib-table uses ${EASYEDA2KICAD}.
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # 3. The user env var is in KiCad's config, NOT the OS env. Surface it
+    #    through find_kicad_user_env_vars (the discovery helper the
+    #    resolver calls). This both pins the contract and exercises the
+    #    only entry point that knows about KiCad's user vars.
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(libroot)},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "CONN-TH_9-6437287-8")
+    assert resolved == pretty_dir / "CONN-TH_9-6437287-8.kicad_mod"
+
+
+def test_footprint_file_user_env_var_takes_precedence_over_os_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KiCad's ``Configure Paths`` is the source of truth — when both the
+    OS environment and ``kicad_common.json`` define the same var with
+    different values, the KiCad config wins. This matches what the GUI
+    does at runtime (KiCad doesn't read PROCESS env for these names)."""
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    libroot_kicad = tmp_path / "from_kicad_config"
+    libroot_kicad.mkdir()
+    (libroot_kicad / "easyeda2kicad.pretty").mkdir()
+    (libroot_kicad / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
+        _FAKE_KICAD_MOD, encoding="utf-8"
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # OS env points at a wrong/empty place; KiCad config wins via the loader.
+    monkeypatch.setenv("EASYEDA2KICAD", str(tmp_path / "from_os_env_should_lose"))
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(libroot_kicad)},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "PART")
+    assert resolved == libroot_kicad / "easyeda2kicad.pretty" / "PART.kicad_mod"
+
+
+def test_find_kicad_user_env_vars_reads_environment_vars_from_kicad_common(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The discovery helper reads ``environment.vars`` from
+    ``kicad_common.json``. Pinned here so the contract doesn't drift —
+    a refactor that walked the wrong JSON path would silently produce
+    an empty dict and break every downstream footprint lookup."""
+    import json
+    from kicad_mcp.discovery import find_kicad_user_env_vars
+
+    fake_config_dir = tmp_path / "kicad_config" / "10.0"
+    fake_config_dir.mkdir(parents=True)
+    (fake_config_dir / "kicad_common.json").write_text(
+        json.dumps(
+            {
+                "environment": {
+                    "vars": {
+                        "EASYEDA2KICAD": "X:/external/easyeda",
+                        "MY_LIBS": "X:/external/mylibs",
+                    }
+                },
+                # Unrelated keys we must not touch
+                "appearance": {"theme": "dark"},
+                "input": {"keymap": "default"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Patch _kicad_config_dirs to return our fake dir.
+    monkeypatch.setattr(
+        "kicad_mcp.discovery._kicad_config_dirs",
+        lambda: [fake_config_dir],
+    )
+
+    env = find_kicad_user_env_vars()
+    assert env == {
+        "EASYEDA2KICAD": "X:/external/easyeda",
+        "MY_LIBS": "X:/external/mylibs",
+    }
+
+
+def test_find_kicad_user_env_vars_returns_empty_when_no_config_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graceful degrade: no kicad_common.json at any candidate dir means
+    we return ``{}`` and fall through to the next resolution strategy.
+    Used to fail at startup when kicad_common.json was absent or
+    malformed."""
+    from kicad_mcp.discovery import find_kicad_user_env_vars
+
+    empty_dir = tmp_path / "no_kicad_config"
+    empty_dir.mkdir()
+    monkeypatch.setattr(
+        "kicad_mcp.discovery._kicad_config_dirs",
+        lambda: [empty_dir],
+    )
+
+    assert find_kicad_user_env_vars() == {}
+
+
 def test_render_board_footprint_block_rewrites_header_to_library_form(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
