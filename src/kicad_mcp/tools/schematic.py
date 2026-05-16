@@ -3237,7 +3237,10 @@ def _reload_schematic_via_ipc() -> str:
         return "The schematic was updated and KiCad was asked to reload it."
     except Exception as exc:
         logger.debug("schematic_reload_failed", error=str(exc))
-        return "The schematic was updated. Reload it manually in KiCad if needed."
+        return (
+            f"The schematic was updated. Reload it manually in KiCad if needed. "
+            f"[debug: {type(exc).__name__}: {exc}]"
+        )
 
 
 def _reload_schematic() -> str:
