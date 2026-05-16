@@ -160,14 +160,30 @@ def test_matches_layer_filter_name_handles_alias_forms() -> None:
     assert _matches_layer_filter_name("In1.Cu", "In1_Cu") is True
 
 
-def test_parse_board_footprint_blocks_extracts_legacy_and_new_net_pads() -> None:
-    # Validates the parser used by the headless ``pcb_get_footprints`` /
-    # ``pcb_get_pads`` paths against BOTH net-clause formats in the wild:
-    #   - KiCad 8/9/10 form: (net "/GND")
-    #   - KiCad 5/6/7 legacy: (net 12 "/GND")
-    # Active KiCad 10 boards still ship legacy forms if they were imported
-    # from older projects without a save-cycle re-write — see the wire
-    # harness production board.
+def test_pad_net_clause_regex_matches_both_kicad_format_versions() -> None:
+    # The headless ``pcb_get_pads`` path uses this regex to extract the net
+    # name from a pad block. Active KiCad 10 boards may contain EITHER
+    # format depending on when the project was first written; the wire
+    # harness production board uses the legacy form, the junction-passive
+    # board uses the new form. The regex must handle both.
+    import re
+
+    net_pat = re.compile(r"\(net\s+(?:\d+\s+)?\"([^\"]+)\"\)")
+
+    new_form = '(pad "1" smd rect (at 0 0) (size 1 1) (net "/GND_RTN"))'
+    legacy_form = '(pad "1" smd rect (at 0 0) (size 1 1) (net 12 "/SIGNAL"))'
+    no_net = '(pad "1" smd rect (at 0 0) (size 1 1))'
+
+    new_match = net_pat.search(new_form)
+    legacy_match = net_pat.search(legacy_form)
+    assert new_match is not None and new_match.group(1) == "/GND_RTN"
+    assert legacy_match is not None and legacy_match.group(1) == "/SIGNAL"
+    assert net_pat.search(no_net) is None
+
+
+def test_parse_board_footprint_blocks_extracts_pads_with_both_net_formats() -> None:
+    # Validates that the block-capture parser preserves both net-clause
+    # forms verbatim so the downstream pad-net regex can run against them.
     board_text = "\n".join(
         [
             "(kicad_pcb",

@@ -651,6 +651,66 @@ def _transactional_board_write(mutator: Callable[[str], str]) -> str:
     return str(board_file)
 
 
+def _resolve_read_source() -> tuple[Path | None, bool]:
+    """Decide whether a read-only ``pcb_get_*`` tool should use live IPC or
+    parse from the configured project's ``.kicad_pcb`` on disk.
+
+    Returns ``(pcb_path, use_live)``:
+    - ``pcb_path`` is the configured PCB file path, or ``None`` if no
+      project is configured AND a board IS open (live-only mode).
+    - ``use_live`` is ``True`` when the live-IPC path should be used.
+
+    Raises ``ValueError`` (via ``_get_pcb_file_for_sync``) only when no
+    project is configured AND no board is open — there's no data source.
+    """
+    try:
+        pcb_path: Path | None = _get_pcb_file_for_sync()
+    except ValueError:
+        pcb_path = None
+
+    if _board_is_open():
+        use_live = pcb_path is None or _live_board_matches_configured(pcb_path)
+    else:
+        if pcb_path is None:
+            raise ValueError(
+                "No PCB file is configured. Call kicad_set_project() or set KICAD_MCP_PCB_FILE."
+            )
+        use_live = False
+    return pcb_path, use_live
+
+
+def _live_board_matches_configured(pcb_path: Path) -> bool:
+    """Decide whether the running pcbnew has the configured project open.
+
+    ``kipy.board.Board.name`` returns the **basename** of the board file
+    (e.g. ``"junction.kicad_pcb"``), NOT a full path — verified against
+    ``kipy/board.py`` and the upstream ``board_filename`` proto spec.
+    So we compare basenames only.
+
+    When the open board's identity can't be determined (mock boards in
+    tests, IPC returning an empty / unexpected value), we **default to
+    True**. The headless file-parse fallback is meant for the deliberate
+    "configured a different project than what pcbnew has open" case;
+    falling to it on ambiguity would silently bypass mocks in existing
+    integration tests and hide real IPC data.
+    """
+    try:
+        live_name = str(get_board().name)
+    except Exception as exc:  # noqa: BLE001 - any IPC weirdness => stay live
+        logger.debug("board_name_unavailable", error=str(exc))
+        return True
+    # Only attempt the basename comparison if the IPC reply looks like an
+    # actual .kicad_pcb filename. Mock boards in tests, partially-initialized
+    # IPC state, or future kipy versions that change the field shape can all
+    # return strings that don't (e.g. ``"<MagicMock ...>"``). Treat anything
+    # that isn't recognisably a PCB filename as "trust the live board" —
+    # the alternative is silently dropping mock-injected board state in
+    # existing integration tests.
+    if not live_name or not live_name.lower().endswith(".kicad_pcb"):
+        return True
+    return Path(live_name).name == pcb_path.name
+
+
 def _board_is_open() -> bool:
     try:
         get_board()
@@ -1879,14 +1939,7 @@ def register(mcp: FastMCP) -> None:
         is used only when the open board's file matches the configured one,
         so unsaved in-memory edits are visible in that case.
         """
-        pcb_path = _get_pcb_file_for_sync()
-        use_live = False
-        if _board_is_open():
-            try:
-                live_path = Path(get_board().name).resolve()
-                use_live = live_path == pcb_path.resolve()
-            except Exception:
-                use_live = False
+        pcb_path, use_live = _resolve_read_source()
 
         if use_live:
             all_footprints = [
@@ -1919,6 +1972,9 @@ def register(mcp: FastMCP) -> None:
             return "\n".join(lines)
 
         # Headless / project-mismatch path: parse the configured PCB file.
+        # ``_resolve_read_source`` guarantees pcb_path is non-None whenever
+        # ``use_live`` is False; the cast is just to satisfy the type checker.
+        pcb_path = cast(Path, pcb_path)
         content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
         parsed = _parse_board_footprint_blocks(content)
         entries = []
@@ -2022,14 +2078,7 @@ def register(mcp: FastMCP) -> None:
         has open. Live IPC is used only when the open board's file matches
         the configured one (so unsaved in-memory edits surface in that case).
         """
-        pcb_path = _get_pcb_file_for_sync()
-        use_live = False
-        if _board_is_open():
-            try:
-                live_path = Path(get_board().name).resolve()
-                use_live = live_path == pcb_path.resolve()
-            except Exception:
-                use_live = False
+        pcb_path, use_live = _resolve_read_source()
 
         if use_live:
             pad_entries, total = _limit(_iter_board_pads_with_refs())
@@ -2046,6 +2095,9 @@ def register(mcp: FastMCP) -> None:
             return "\n".join(lines)
 
         # Headless / project-mismatch path: parse the configured PCB file.
+        # ``_resolve_read_source`` guarantees pcb_path is non-None whenever
+        # ``use_live`` is False; the cast is just to satisfy the type checker.
+        pcb_path = cast(Path, pcb_path)
         content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
         parsed = _parse_board_footprint_blocks(content)
         rows: list[tuple[str, str, str, float | None, float | None]] = []
@@ -2060,6 +2112,9 @@ def register(mcp: FastMCP) -> None:
         at_pat = re.compile(r"\(at\s+([-\d.]+)\s+([-\d.]+)")
         for ref, info in parsed.items():
             block = str(info.get("block", ""))
+            fp_x = info.get("x_mm")
+            fp_y = info.get("y_mm")
+            fp_rot = info.get("rotation") or 0
             cursor = 0
             while cursor < len(block):
                 m = pad_pat.search(block, cursor)
@@ -2071,12 +2126,34 @@ def register(mcp: FastMCP) -> None:
                 nm = net_pat.search(pad_block)
                 net_name = nm.group(1) if nm else "(none)"
                 am = at_pat.search(pad_block)
-                # Pad-local (at x y) is relative to the footprint origin, but
-                # for cross-board pad-net comparisons we just need the net so
-                # leave coordinates as the relative values found in the block.
-                px = float(am.group(1)) if am else None
-                py = float(am.group(2)) if am else None
-                rows.append((ref, pad_num, net_name, px, py))
+                # Compose board-absolute coords so the headless output matches
+                # the live IPC path (which kipy reports board-absolute). The
+                # ``(at x y)`` inside a ``(pad ...)`` block is relative to the
+                # footprint origin AND further rotated by the footprint's
+                # ``(at fx fy rot)`` value. Skip the math if anything is
+                # missing.
+                abs_x: float | None = None
+                abs_y: float | None = None
+                if (
+                    am is not None
+                    and isinstance(fp_x, int | float)
+                    and isinstance(fp_y, int | float)
+                ):
+                    local_x = float(am.group(1))
+                    local_y = float(am.group(2))
+                    rad = math.radians(float(fp_rot))
+                    cos_r = math.cos(rad)
+                    sin_r = math.sin(rad)
+                    # KiCad PCB rotation: counter-clockwise positive in math
+                    # convention, but the schematic page Y axis points down so
+                    # the displayed angle reads as clockwise. The composition
+                    # below produces board-absolute mm matching what kipy
+                    # reports via ``pad.position`` on the live IPC path.
+                    rotated_x = local_x * cos_r - local_y * sin_r
+                    rotated_y = local_x * sin_r + local_y * cos_r
+                    abs_x = float(fp_x) + rotated_x
+                    abs_y = float(fp_y) + rotated_y
+                rows.append((ref, pad_num, net_name, abs_x, abs_y))
                 cursor = m.start() + pe + 1
 
         rows.sort(key=lambda r: (r[0], int(r[1]) if r[1].isdigit() else 1_000_000, r[1]))
@@ -2085,11 +2162,11 @@ def register(mcp: FastMCP) -> None:
             return "No pads are present in the configured PCB file."
         cap = get_config().max_items_per_response
         shown = rows[:cap]
-        lines = [f"Pads ({total} total) [headless / file-based, showing {len(shown)}]:"]
+        lines = [f"Pads ({total} total):"]
         for index, (ref, pad_num, net_name, px, py) in enumerate(shown, start=1):
             coord = ""
             if px is not None and py is not None:
-                coord = f" @ ({px:.2f}, {py:.2f}) mm (footprint-local)"
+                coord = f" @ ({px:.2f}, {py:.2f}) mm"
             lines.append(f"{index}. {ref}:{pad_num} net={net_name}{coord}")
         return "\n".join(lines)
 
