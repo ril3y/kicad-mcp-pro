@@ -193,6 +193,21 @@ _register_many(
     verification_level="verified",
 )
 
+_register_many(
+    ["lib_set_pin_name"],
+    # Library writes belong everywhere except the minimal profile
+    # (which the unit test pins as read-project-tools only).
+    profiles=_SCH_PROFILES | _PCB_PROFILES,
+    # WRITE because the tool mutates a .kicad_sym file on disk.
+    # supports_dry_run=True maps to the tool's dry_run flag — caller can
+    # validate the rewrite via kicad-cli without persisting.
+    tier=AccessTier.WRITE,
+    runtime=RuntimeRequirement.KICAD_CLI,
+    supports_dry_run=True,
+    verification_level="verified",
+)
+
+
 register(
     CapabilityRecord(
         name="export_manufacturing_package",
