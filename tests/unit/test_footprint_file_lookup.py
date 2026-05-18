@@ -297,9 +297,7 @@ def test_footprint_file_expands_user_env_var_from_kicad_common(
     libroot = tmp_path / "external_libs"
     pretty_dir = libroot / "easyeda2kicad.pretty"
     pretty_dir.mkdir(parents=True)
-    (pretty_dir / "CONN-TH_9-6437287-8.kicad_mod").write_text(
-        _FAKE_KICAD_MOD, encoding="utf-8"
-    )
+    (pretty_dir / "CONN-TH_9-6437287-8.kicad_mod").write_text(_FAKE_KICAD_MOD, encoding="utf-8")
 
     # 2. Build a project whose fp-lib-table uses ${EASYEDA2KICAD}.
     project_dir = tmp_path / "proj"
@@ -412,6 +410,7 @@ def test_find_kicad_user_env_vars_reads_environment_vars_from_kicad_common(
     a refactor that walked the wrong JSON path would silently produce
     an empty dict and break every downstream footprint lookup."""
     import json
+
     from kicad_mcp.discovery import find_kicad_user_env_vars
 
     fake_config_dir = tmp_path / "kicad_config" / "10.0"

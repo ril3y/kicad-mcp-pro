@@ -32,7 +32,6 @@ from kipy.proto.common import types as common_types
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
-from ..discovery import find_kicad_user_env_vars
 from ..connection import (
     PERSISTENCE_HINT as _PERSISTENCE_HINT,
 )
@@ -41,6 +40,7 @@ from ..connection import (
     board_transaction,
     get_board,
 )
+from ..discovery import find_kicad_user_env_vars
 from ..models.common import _FootprintAttributesLike, _FootprintLike, _PadLike
 from ..models.pcb import (
     AddCircleInput,
@@ -1603,7 +1603,7 @@ def _parse_pcb_net_table(content: str) -> dict[str, int]:
     a non-empty mapping.
     """
     table: dict[str, int] = {}
-    for match in re.finditer(rf'\(net\s+(\d+)\s+{STRING_PATTERN}\s*\)', content):
+    for match in re.finditer(rf"\(net\s+(\d+)\s+{STRING_PATTERN}\s*\)", content):
         try:
             code = int(match.group(1))
         except ValueError:
@@ -1656,11 +1656,11 @@ def _inject_pcb_net_table_entries(content: str, new_entries: list[tuple[int, str
     """
     if not new_entries:
         return content
-    new_lines = "\n".join(f'\t(net {code} {_sexpr_string(name)})' for code, name in new_entries)
+    new_lines = "\n".join(f"\t(net {code} {_sexpr_string(name)})" for code, name in new_entries)
 
     # Find last existing top-level net entry
     last_match = None
-    for match in re.finditer(rf'\n\t\(net\s+\d+\s+{STRING_PATTERN}\s*\)', content):
+    for match in re.finditer(rf"\n\t\(net\s+\d+\s+{STRING_PATTERN}\s*\)", content):
         last_match = match
     if last_match is not None:
         insert_at = last_match.end()
@@ -1668,7 +1668,7 @@ def _inject_pcb_net_table_entries(content: str, new_entries: list[tuple[int, str
 
     # No existing table — insert after (setup ...) so it precedes any
     # footprint blocks that will reference these nets.
-    setup_match = re.search(r'\n\t\(setup\b', content)
+    setup_match = re.search(r"\n\t\(setup\b", content)
     if setup_match is not None:
         # Balance-extract the setup block to find its closing paren.
         setup_block, length = _extract_block(content, setup_match.start() + 1)
@@ -1677,7 +1677,7 @@ def _inject_pcb_net_table_entries(content: str, new_entries: list[tuple[int, str
             return content[:insert_at] + "\n" + new_lines + content[insert_at:]
 
     # Last resort: insert right before the first (footprint ...) block.
-    fp_match = re.search(r'\n\t\(footprint\s', content)
+    fp_match = re.search(r"\n\t\(footprint\s", content)
     if fp_match is not None:
         return content[: fp_match.start()] + "\n" + new_lines + content[fp_match.start() :]
 
@@ -2045,16 +2045,25 @@ def _run_kicad_cli_netlist_export(sch_path: Path, out_path: Path) -> tuple[int, 
         return -1, "kicad-cli binary is not available."
     variants = [
         [
-            "sch", "export", "netlist",
-            "--format", "kicadsexpr",
-            "--output", str(out_path),
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadsexpr",
+            "--output",
+            str(out_path),
             str(sch_path),
         ],
         [
-            "sch", "export", "netlist",
-            "--format", "kicadsexpr",
-            "--input", str(sch_path),
-            "--output", str(out_path),
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadsexpr",
+            "--input",
+            str(sch_path),
+            "--output",
+            str(out_path),
         ],
     ]
     last_msg = "unknown error"
@@ -2062,7 +2071,10 @@ def _run_kicad_cli_netlist_export(sch_path: Path, out_path: Path) -> tuple[int, 
         try:
             result = subprocess.run(
                 [str(cfg.kicad_cli), *variant],
-                capture_output=True, text=True, timeout=cfg.cli_timeout, check=False,
+                capture_output=True,
+                text=True,
+                timeout=cfg.cli_timeout,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             last_msg = f"{type(exc).__name__}: {exc}"
@@ -2184,7 +2196,9 @@ def _format_pcb_netlist_diff_report(
     lines.append(f"  Add to PCB: {len(additions)} footprint(s)")
     for ref in additions[:30]:
         info = nl_components.get(ref, {})
-        lines.append(f"    + {ref:8s} {info.get('footprint',''):42s} value={info.get('value','')}")
+        lines.append(
+            f"    + {ref:8s} {info.get('footprint', ''):42s} value={info.get('value', '')}"
+        )
     if len(additions) > 30:
         lines.append(f"    ... and {len(additions) - 30} more")
 
@@ -3519,8 +3533,10 @@ def register(mcp: FastMCP) -> None:
             report_header = f"kicad-cli output: {msg}\n\n"
 
         if not apply:
-            return report_header + _format_pcb_netlist_diff_report(diff, nl_components) + (
-                "\n\nRe-run with apply=True to write these changes into the .kicad_pcb."
+            return (
+                report_header
+                + _format_pcb_netlist_diff_report(diff, nl_components)
+                + ("\n\nRe-run with apply=True to write these changes into the .kicad_pcb.")
             )
 
         # Build (ref, pin) -> net_name map for pad rewrites
@@ -3567,7 +3583,7 @@ def register(mcp: FastMCP) -> None:
                 x = origin_x_mm + col * grid_mm * 8.0
                 y = origin_y_mm + row * grid_mm * 8.0
                 if all(
-                    (x - cx) ** 2 + (y - cy) ** 2 >= collision_radius_mm ** 2
+                    (x - cx) ** 2 + (y - cy) ** 2 >= collision_radius_mm**2
                     for cx, cy in occupied_centers
                 ):
                     return x, y, slot + 1
@@ -3657,7 +3673,7 @@ def register(mcp: FastMCP) -> None:
         if new_net_entries:
             out_lines.append(
                 f"  New net-table entries injected: {len(new_net_entries)} "
-                "(canonical (net N \"name\") form added at top of .kicad_pcb)"
+                '(canonical (net N "name") form added at top of .kicad_pcb)'
             )
         out_lines.append(f"  Footprints added: {len(additions_to_apply)}")
         for ref in cap_additions:
@@ -3673,7 +3689,9 @@ def register(mcp: FastMCP) -> None:
         out_lines.append(f"  Existing footprints with pad-net rewrites: {len(replacements)}")
         for ref in sorted(replacements):
             changed_pads = changes_by_ref[ref]
-            pin_summary = ", ".join(f"{pin}->{net}" for pin, net in sorted(changed_pads.items())[:4])
+            pin_summary = ", ".join(
+                f"{pin}->{net}" for pin, net in sorted(changed_pads.items())[:4]
+            )
             if len(changed_pads) > 4:
                 pin_summary += f", +{len(changed_pads) - 4} more"
             out_lines.append(f"    ~ {ref}: {pin_summary}")
