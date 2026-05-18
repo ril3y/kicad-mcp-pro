@@ -3256,15 +3256,12 @@ def _reload_schematic_via_ipc() -> str:
     owns the file, but callers should be aware before exposing this in an
     interactive context.
     """
-    SAVED_NO_KICAD = (
-        "Saved. KiCad isn't running for a live refresh — "
-        "open the schematic to see the change."
+    SAVED_NO_KICAD = (  # noqa: N806
+        "Saved. KiCad isn't running for a live refresh — open the schematic to see the change."
     )
-    SAVED_NO_DOC = "Saved. No schematic is open in KiCad — open it to see the change."
-    SAVED_REFRESH_FAILED = (
-        "Saved. Live refresh request failed; reload manually in KiCad."
-    )
-    SAVED_IPC_CLIENT_MISSING = (
+    SAVED_NO_DOC = "Saved. No schematic is open in KiCad — open it to see the change."  # noqa: N806
+    SAVED_REFRESH_FAILED = "Saved. Live refresh request failed; reload manually in KiCad."  # noqa: N806
+    SAVED_IPC_CLIENT_MISSING = (  # noqa: N806
         "Saved. KiCad IPC client (kipy) is unavailable — "
         "the file is on disk but live refresh is impossible until kipy is installed."
     )

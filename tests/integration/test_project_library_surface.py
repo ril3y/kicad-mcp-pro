@@ -557,7 +557,7 @@ async def test_schematic_surface(sample_project: Path, mock_kicad) -> None:
     assert "Pin A" not in pins
     assert "power flags" in power.lower()
     assert "Annotated" in annotated
-    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")
+    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")  # noqa: N806
     assert any(t in built.lower() for t in _PERSISTENCE_TOKENS)
     assert any(t in reload_text.lower() for t in _PERSISTENCE_TOKENS)
     assert '(symbol "power:GND"' in sch_text

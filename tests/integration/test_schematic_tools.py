@@ -86,7 +86,7 @@ async def test_schematic_misc_file_tools_cover_buses_labels_jumper_and_project_f
     schematic = (sample_project / "demo.kicad_sch").read_text(encoding="utf-8")
     project_payload = (sample_project / "demo.kicad_pro").read_text(encoding="utf-8")
 
-    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")
+    _PERSISTENCE_TOKENS = ("updated", "reload", "saved", "refreshed")  # noqa: N806
     assert any(t in bus.lower() for t in _PERSISTENCE_TOKENS)
     assert any(t in entry.lower() for t in _PERSISTENCE_TOKENS)
     assert any(t in no_connect.lower() for t in _PERSISTENCE_TOKENS)

@@ -1,3 +1,4 @@
+# ruff: noqa: ANN401
 # pyright: reportPrivateUsage=false, reportUnknownLambdaType=false
 # pyright: reportMissingImports=false, reportUnknownVariableType=false
 # pyright: reportUnknownMemberType=false
