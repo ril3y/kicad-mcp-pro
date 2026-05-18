@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import sexpdata
+import sexpdata  # type: ignore[import-untyped]
 from sexpdata import Symbol
 
 
@@ -57,7 +57,9 @@ def dump_sym_lib(tree: list[Any]) -> str:
     so the file still loads correctly; when KiCad next saves it through
     eeschema or the Symbol Editor it'll re-canonicalize the layout.
     """
-    return sexpdata.dumps(tree)
+    # sexpdata isn't typed; mypy sees `dumps` as returning Any. The actual
+    # return is a str — coerce explicitly so callers see a concrete type.
+    return str(sexpdata.dumps(tree))
 
 
 def iter_top_level_symbols(tree: list[Any]) -> Iterator[list[Any]]:
