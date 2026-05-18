@@ -1,3 +1,6 @@
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
+# pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false
+# pyright: reportMissingTypeStubs=false
 """Safe structural editor for KiCad ``.kicad_sym`` libraries.
 
 Every prior attempt in this repo to mutate a ``.kicad_sym`` file via
