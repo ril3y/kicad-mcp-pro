@@ -1,6 +1,5 @@
-# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
-# pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false
-# pyright: reportMissingTypeStubs=false
+# pyright: reportUnknownArgumentType=false
+# pyright: reportUnknownVariableType=false
 """Safe structural editor for KiCad ``.kicad_sym`` libraries.
 
 Every prior attempt in this repo to mutate a ``.kicad_sym`` file via
@@ -20,10 +19,12 @@ import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import sexpdata  # type: ignore[import-untyped]
-from sexpdata import Symbol
+import sexpdata as _sexpdata_module  # type: ignore[import-untyped]  # pyright: ignore[reportMissingImports]
+
+_sexpdata: Any = _sexpdata_module
+Symbol: Any = _sexpdata.Symbol
 
 
 def _is_token(node: Any, name: str) -> bool:  # noqa: ANN401 — s-expr nodes are heterogeneous
@@ -37,19 +38,19 @@ def load_sym_lib(path: Path) -> list[Any]:
     Raises ``FileNotFoundError`` if the path doesn't exist and
     ``ValueError`` if the file is not a recognisable ``kicad_symbol_lib``
     document. Strings inside the tree keep their original Python ``str``
-    type; bare tokens become ``sexpdata.Symbol`` instances. Both must be
+    type; bare tokens become ``_sexpdata.Symbol`` instances. Both must be
     handled when walking the tree.
     """
     if not path.exists():
         raise FileNotFoundError(f"Symbol library not found: {path}")
     text = path.read_text(encoding="utf-8")
-    tree = sexpdata.loads(text)
-    if not (isinstance(tree, list) and tree and _is_token(tree[0], "kicad_symbol_lib")):
+    parsed: Any = _sexpdata.loads(text)
+    if not (isinstance(parsed, list) and parsed and _is_token(parsed[0], "kicad_symbol_lib")):
         raise ValueError(
             f"{path} does not look like a kicad_symbol_lib — first element "
-            f"is {tree[0] if isinstance(tree, list) and tree else tree!r}"
+            f"is {parsed[0] if isinstance(parsed, list) and parsed else parsed!r}"
         )
-    return tree
+    return cast(list[Any], parsed)
 
 
 def dump_sym_lib(tree: list[Any]) -> str:
@@ -62,7 +63,7 @@ def dump_sym_lib(tree: list[Any]) -> str:
     """
     # sexpdata isn't typed; mypy sees `dumps` as returning Any. The actual
     # return is a str — coerce explicitly so callers see a concrete type.
-    return str(sexpdata.dumps(tree))
+    return str(_sexpdata.dumps(tree))
 
 
 def iter_top_level_symbols(tree: list[Any]) -> Iterator[list[Any]]:

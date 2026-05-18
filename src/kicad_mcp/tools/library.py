@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -157,9 +158,12 @@ def _resolve_symbol_library_path(library: str, library_path: str) -> Path:
                 try:
                     from .. import discovery as _discovery
 
-                    loader = getattr(_discovery, "find_kicad_user_env_vars", None)
-                    if callable(loader):
-                        for key, value in loader().items():
+                    loader_callable = cast(
+                        Callable[[], dict[str, str]] | None,
+                        getattr(_discovery, "find_kicad_user_env_vars", None),
+                    )
+                    if loader_callable is not None:
+                        for key, value in loader_callable().items():
                             uri = uri.replace("${" + key + "}", value)
                 except (ImportError, AttributeError):
                     pass
@@ -900,12 +904,9 @@ def register(mcp: FastMCP) -> None:
 
         out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(sexpr, encoding="utf-8")
-        return (
-            f"Footprint saved to {out_file}\n"
-            f"Package: {package}, Density: {density}"
-            + (f", {pin_count} pins" if pin_count else "")
-            + (f", {pitch_mm:.2f}mm pitch" if pitch_mm else "")
-        )
+        return f"Footprint saved to {out_file}\n" f"Package: {package}, Density: {density}" + (
+            f", {pin_count} pins" if pin_count else ""
+        ) + (f", {pitch_mm:.2f}mm pitch" if pitch_mm else "")
 
     @mcp.tool()
     @headless_compatible
