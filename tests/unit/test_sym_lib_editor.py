@@ -16,7 +16,6 @@ that the parser handles them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -31,7 +30,11 @@ from kicad_mcp.utils.sym_lib_editor import (
     set_pin_type,
 )
 
-
+# Fixture .kicad_sym body kept verbatim from real KiCad output so the
+# line shapes (especially nested (effects ...) on one line) match what
+# the parser sees in the wild. Long lines are intentional.
+# fmt: off
+# ruff: noqa: E501
 _FIXTURE_LIB = """\
 (kicad_symbol_lib (version 20241209) (generator "test")
   (symbol "TEST_RELAY"
@@ -100,7 +103,7 @@ def test_load_sym_lib_rejects_non_kicad_sym_files(tmp_path: Path) -> None:
     library and must be rejected with a clear error. Without this guard
     callers could silently corrupt e.g. a .kicad_sch file."""
     p = tmp_path / "not_a_lib.kicad_sym"
-    p.write_text('(some_other_doc (version 1))\n', encoding="utf-8")
+    p.write_text("(some_other_doc (version 1))\n", encoding="utf-8")
     with pytest.raises(ValueError, match="kicad_symbol_lib"):
         load_sym_lib(p)
 
@@ -144,8 +147,14 @@ def test_find_pin_by_number(tmp_path: Path) -> None:
     pin2 = find_pin(sym, "2")
     assert pin2 is not None
     # Confirm the right pin came back
-    nums = [c[1] for c in pin2 if isinstance(c, list) and len(c) >= 2
-            and hasattr(c[0], "value") and c[0].value() == "number"]
+    nums = [
+        c[1]
+        for c in pin2
+        if isinstance(c, list)
+        and len(c) >= 2
+        and hasattr(c[0], "value")
+        and c[0].value() == "number"
+    ]
     assert nums == ["2"]
 
 
@@ -159,8 +168,11 @@ def test_set_pin_name_rewrites_existing_name(tmp_path: Path) -> None:
     assert set_pin_name(pin, "Coil1") is True
     # Re-find to confirm
     pin2 = find_pin(sym, "1")
-    names = [c[1] for c in pin2 if isinstance(c, list) and len(c) >= 2
-             and hasattr(c[0], "value") and c[0].value() == "name"]
+    names = [
+        c[1]
+        for c in pin2
+        if isinstance(c, list) and len(c) >= 2 and hasattr(c[0], "value") and c[0].value() == "name"
+    ]
     assert names == ["Coil1"]
 
 
@@ -208,14 +220,22 @@ def test_dump_sym_lib_round_trip_preserves_structure(tmp_path: Path) -> None:
         s1 = find_symbol(tree1, name)
         s2 = find_symbol(tree2, name)
         pins1 = sorted(
-            c[1] for p in iter_pins(s1) for c in p
-            if isinstance(c, list) and len(c) >= 2
-            and hasattr(c[0], "value") and c[0].value() == "number"
+            c[1]
+            for p in iter_pins(s1)
+            for c in p
+            if isinstance(c, list)
+            and len(c) >= 2
+            and hasattr(c[0], "value")
+            and c[0].value() == "number"
         )
         pins2 = sorted(
-            c[1] for p in iter_pins(s2) for c in p
-            if isinstance(c, list) and len(c) >= 2
-            and hasattr(c[0], "value") and c[0].value() == "number"
+            c[1]
+            for p in iter_pins(s2)
+            for c in p
+            if isinstance(c, list)
+            and len(c) >= 2
+            and hasattr(c[0], "value")
+            and c[0].value() == "number"
         )
         assert pins1 == pins2, f"pin numbers differ for {name}"
 
@@ -242,8 +262,12 @@ def test_set_pin_name_then_dump_then_load_preserves_change(
     def name_for(pin_num: str) -> str:
         pin = find_pin(sym2, pin_num)
         for ch in pin:
-            if (isinstance(ch, list) and len(ch) >= 2
-                    and hasattr(ch[0], "value") and ch[0].value() == "name"):
+            if (
+                isinstance(ch, list)
+                and len(ch) >= 2
+                and hasattr(ch[0], "value")
+                and ch[0].value() == "name"
+            ):
                 return ch[1]
         return ""
 

@@ -22,7 +22,9 @@ from types import SimpleNamespace
 
 import pytest
 
-
+# Fixture .kicad_sym body kept verbatim from real KiCad output.
+# fmt: off
+# ruff: noqa: E501
 _FIXTURE_LIB = """\
 (kicad_symbol_lib (version 20241209) (generator "test")
   (symbol "FAKE_RELAY"
@@ -81,9 +83,7 @@ def _setup(tmp_path: Path, monkeypatch) -> tuple[Path, SimpleNamespace]:
 
 
 @needs_cli
-def test_lib_set_pin_name_renames_pin_and_persists_change(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_renames_pin_and_persists_change(tmp_path: Path, monkeypatch) -> None:
     """Full path: rename pin "1" to "Coil1" via the MCP tool, confirm
     the rename landed on disk AND that the file still parses cleanly
     via kicad-cli (so the next person to open it doesn't see a broken
@@ -121,9 +121,7 @@ def test_lib_set_pin_name_renames_pin_and_persists_change(
 
 
 @needs_cli
-def test_lib_set_pin_name_dry_run_validates_without_writing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_dry_run_validates_without_writing(tmp_path: Path, monkeypatch) -> None:
     """dry_run=True must validate (kicad-cli must accept the rewrite)
     but NOT touch the live file. Used by callers that want to confirm
     a rename would succeed before committing to it."""
@@ -154,9 +152,7 @@ def test_lib_set_pin_name_dry_run_validates_without_writing(
     assert not backup.exists()
 
 
-def test_lib_set_pin_name_reports_when_symbol_missing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_reports_when_symbol_missing(tmp_path: Path, monkeypatch) -> None:
     """Looking up a non-existent symbol should fail cleanly with a
     pointer at the cause — NOT mangle the file."""
     from kicad_mcp.server import build_server
@@ -182,9 +178,7 @@ def test_lib_set_pin_name_reports_when_symbol_missing(
     assert lib.read_text(encoding="utf-8") == original
 
 
-def test_lib_set_pin_name_reports_when_pin_missing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_reports_when_pin_missing(tmp_path: Path, monkeypatch) -> None:
     """Same shape — pin number missing must NOT cause a write."""
     from kicad_mcp.server import build_server
     from tests.conftest import call_tool_text
@@ -211,9 +205,7 @@ def test_lib_set_pin_name_reports_when_pin_missing(
 
 
 @needs_cli
-def test_lib_set_pin_name_noop_when_name_already_set(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_noop_when_name_already_set(tmp_path: Path, monkeypatch) -> None:
     """Renaming a pin to its existing name should be a no-op (no write,
     no backup, clear "No change" message). Without this guard repeated
     automation runs would needlessly churn the file."""
@@ -241,9 +233,7 @@ def test_lib_set_pin_name_noop_when_name_already_set(
 
 
 @needs_cli
-def test_lib_set_pin_name_also_sets_pin_type_when_requested(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_lib_set_pin_name_also_sets_pin_type_when_requested(tmp_path: Path, monkeypatch) -> None:
     """The optional ``new_type`` parameter retypes a pin (unspecified ->
     passive, etc.). This is part of the rename flow because turning a
     relay's "unspecified" pins into "passive" matches what KiCad's own

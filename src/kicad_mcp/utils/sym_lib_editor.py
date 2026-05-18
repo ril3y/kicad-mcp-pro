@@ -23,7 +23,7 @@ import sexpdata
 from sexpdata import Symbol
 
 
-def _is_token(node: Any, name: str) -> bool:
+def _is_token(node: Any, name: str) -> bool:  # noqa: ANN401 — s-expr nodes are heterogeneous
     """Return True if ``node`` is the bare s-expression token ``name``."""
     return isinstance(node, Symbol) and node.value() == name
 
@@ -66,11 +66,7 @@ def iter_top_level_symbols(tree: list[Any]) -> Iterator[list[Any]]:
     and any ``(version ...)`` / ``(generator ...)`` metadata children
     that aren't symbol blocks."""
     for child in tree[1:]:
-        if (
-            isinstance(child, list)
-            and len(child) >= 2
-            and _is_token(child[0], "symbol")
-        ):
+        if isinstance(child, list) and len(child) >= 2 and _is_token(child[0], "symbol"):
             yield child
 
 
@@ -92,7 +88,7 @@ def iter_pins(symbol_node: list[Any]) -> Iterator[list[Any]]:
     whole subtree rather than just the top-level children.
     """
 
-    def _walk(node: Any) -> Iterator[list[Any]]:
+    def _walk(node: Any) -> Iterator[list[Any]]:  # noqa: ANN401
         if isinstance(node, list):
             if node and _is_token(node[0], "pin"):
                 yield node
@@ -124,11 +120,7 @@ def set_pin_name(pin_node: list[Any], new_name: str) -> bool:
     True if the name was changed (or wasn't there and one was added),
     False if no change was made (e.g. the new name matched the old)."""
     for child in pin_node:
-        if (
-            isinstance(child, list)
-            and len(child) >= 2
-            and _is_token(child[0], "name")
-        ):
+        if isinstance(child, list) and len(child) >= 2 and _is_token(child[0], "name"):
             if str(child[1]) == new_name:
                 return False
             child[1] = new_name
@@ -138,11 +130,7 @@ def set_pin_name(pin_node: list[Any], new_name: str) -> bool:
     # orders these.
     new_child: list[Any] = [Symbol("name"), new_name]
     for index, child in enumerate(pin_node):
-        if (
-            isinstance(child, list)
-            and len(child) >= 2
-            and _is_token(child[0], "number")
-        ):
+        if isinstance(child, list) and len(child) >= 2 and _is_token(child[0], "number"):
             pin_node.insert(index, new_child)
             return True
     pin_node.append(new_child)

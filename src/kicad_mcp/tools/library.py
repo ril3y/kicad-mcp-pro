@@ -539,9 +539,7 @@ def register(mcp: FastMCP) -> None:
         if not (changed_name or changed_type):
             return (
                 f"No change: pin {pin_number} on '{symbol_name}' already has "
-                f"name='{new_name}'"
-                + (f", type='{new_type}'" if new_type else "")
-                + "."
+                f"name='{new_name}'" + (f", type='{new_type}'" if new_type else "") + "."
             )
 
         new_text = dump_sym_lib(tree)
@@ -550,9 +548,7 @@ def register(mcp: FastMCP) -> None:
         ok, msg = validate_via_kicad_cli(new_text, cfg.kicad_cli)
         if not ok:
             return (
-                f"Refusing to write: kicad-cli validation failed.\n"
-                f"  {msg}\n"
-                "Library file untouched."
+                f"Refusing to write: kicad-cli validation failed.\n  {msg}\nLibrary file untouched."
             )
 
         if dry_run:
