@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,15 @@ from ..utils.component_search import (
     normalize_lcsc_code,
 )
 from ..utils.sexpr import _extract_block, _sexpr_string
+from ..utils.sym_lib_editor import (
+    dump_sym_lib,
+    find_pin,
+    find_symbol,
+    load_sym_lib,
+    set_pin_name,
+    set_pin_type,
+    validate_via_kicad_cli,
+)
 from .metadata import headless_compatible
 from .schematic import get_schematic_backend, project_schematic_files, update_symbol_property
 
@@ -87,6 +97,97 @@ def _read_symbol_file(library: str) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _expand_kicad_lib_uri_envvars(uri: str, project_dir: Path) -> str:
+    """Expand ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` / OS env / KiCad
+    config env vars inside a sym-lib-table URI string."""
+    import os
+
+    uri = uri.replace("${KIPRJMOD}", str(project_dir))
+    uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
+    try:
+        from .. import discovery as _discovery
+
+        loader_callable = cast(
+            Callable[[], dict[str, str]] | None,
+            getattr(_discovery, "find_kicad_user_env_vars", None),
+        )
+        if loader_callable is not None:
+            for key, value in loader_callable().items():
+                uri = uri.replace("${" + key + "}", value)
+    except (ImportError, AttributeError):
+        pass
+    return uri
+
+
+def _lookup_in_project_sym_lib_table(library: str, project_dir: Path) -> Path | None:
+    """Look up ``library`` by name in the project-local ``sym-lib-table``
+    and return its (env-var-expanded) URI path if the file exists."""
+    sym_lib_table = project_dir / "sym-lib-table"
+    if not sym_lib_table.exists():
+        return None
+    try:
+        table_text = sym_lib_table.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    entry_pattern = re.compile(
+        r'\(lib\s+\(name\s+"?'
+        + re.escape(library)
+        + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"',
+        re.IGNORECASE,
+    )
+    match = entry_pattern.search(table_text)
+    if match is None:
+        return None
+    uri = _expand_kicad_lib_uri_envvars(match.group(1), project_dir)
+    candidate = Path(uri)
+    return candidate if candidate.exists() else None
+
+
+def _resolve_symbol_library_path(library: str, library_path: str) -> Path:
+    """Locate the ``.kicad_sym`` file for an editing operation.
+
+    Priority:
+      1. If ``library_path`` is provided, use it verbatim (after
+         resolving ``~`` and ``${ENV}`` expansions).
+      2. Otherwise treat ``library`` as a library name and look it up
+         in the project-local ``sym-lib-table`` (env vars expanded), then
+         fall back to ``cfg.symbol_library_dir``.
+
+    Raises ``FileNotFoundError`` if no path resolves to an existing file.
+    Used by tools that mutate library files; non-mutating reads can keep
+    using the simpler ``_read_symbol_file``.
+    """
+    import os
+
+    if library_path:
+        expanded = os.path.expanduser(os.path.expandvars(library_path))
+        candidate = Path(expanded)
+        if not candidate.exists():
+            raise FileNotFoundError(f"Library file not found: {candidate}")
+        return candidate
+
+    if not library:
+        raise ValueError("Either library name or library_path must be supplied.")
+
+    cfg = get_config()
+    if cfg.project_dir is not None:
+        from_project = _lookup_in_project_sym_lib_table(library, cfg.project_dir)
+        if from_project is not None:
+            return from_project
+
+    fallback = _symbol_library_dir() / f"{library}.kicad_sym"
+    if fallback.exists():
+        return fallback
+    raise FileNotFoundError(
+        f"Library '{library}' was not found in project sym-lib-table or in "
+        f"the global symbol library directory."
+    )
 
 
 def _footprint_file(library: str, footprint: str) -> Path:
@@ -390,6 +491,97 @@ def register(mcp: FastMCP) -> None:
         assignment = f"{library}:{footprint}"
         update_symbol_property(reference, "Footprint", assignment)
         return f"Assigned footprint '{assignment}' to '{reference}'."
+
+    @mcp.tool()
+    @headless_compatible
+    def lib_set_pin_name(
+        symbol_name: str,
+        pin_number: str,
+        new_name: str,
+        library: str = "",
+        library_path: str = "",
+        new_type: str = "",
+        dry_run: bool = False,
+    ) -> str:
+        """Rename a pin (and optionally retype it) inside a .kicad_sym file.
+
+        Edits the library file directly through an S-expression parser
+        (no regex on raw bytes) and validates the result with
+        ``kicad-cli sym upgrade --force`` before persisting, so the
+        file always remains structurally valid for KiCad. Targets
+        easyeda2kicad-imported symbols whose pin names default to bare
+        numerics (``"1"`` ... ``"8"``); after renaming the schematic
+        instances will pick up the new names on next reload.
+
+        Supply either ``library`` (name, resolved via the project
+        sym-lib-table with env-var expansion) or ``library_path``
+        (absolute path to a .kicad_sym file). ``new_type`` is optional
+        and accepts the KiCad pin types (``passive``, ``input``,
+        ``output``, ``power_in``, ``power_out``, etc.). ``dry_run=True``
+        validates the rewrite without writing.
+
+        A ``<file>.bak-pre-rename`` backup is written next to the
+        library before any mutation; restoring is a single file copy.
+        """
+        try:
+            lib_file = _resolve_symbol_library_path(library, library_path)
+        except (FileNotFoundError, ValueError) as exc:
+            return f"Could not resolve library: {exc}"
+
+        try:
+            tree = load_sym_lib(lib_file)
+        except (FileNotFoundError, ValueError) as exc:
+            return f"Library parse failed: {exc}"
+
+        symbol_node = find_symbol(tree, symbol_name)
+        if symbol_node is None:
+            return f"Symbol '{symbol_name}' was not found in {lib_file.name}."
+
+        pin_node = find_pin(symbol_node, pin_number)
+        if pin_node is None:
+            return (
+                f"Pin '{pin_number}' was not found in symbol '{symbol_name}'. "
+                "Confirm the pin number against the datasheet."
+            )
+
+        changed_name = set_pin_name(pin_node, new_name)
+        changed_type = False
+        if new_type:
+            changed_type = set_pin_type(pin_node, new_type)
+
+        if not (changed_name or changed_type):
+            return (
+                f"No change: pin {pin_number} on '{symbol_name}' already has "
+                f"name='{new_name}'" + (f", type='{new_type}'" if new_type else "") + "."
+            )
+
+        new_text = dump_sym_lib(tree)
+
+        cfg = get_config()
+        ok, msg = validate_via_kicad_cli(new_text, cfg.kicad_cli)
+        if not ok:
+            return (
+                f"Refusing to write: kicad-cli validation failed.\n  {msg}\nLibrary file untouched."
+            )
+
+        if dry_run:
+            return (
+                f"dry-run OK: pin {pin_number} on '{symbol_name}' would be "
+                f"renamed to '{new_name}'"
+                + (f" and retyped to '{new_type}'" if changed_type else "")
+                + f". Validated via kicad-cli ({msg or 'no output'})."
+            )
+
+        backup = lib_file.with_suffix(lib_file.suffix + ".bak-pre-rename")
+        backup.write_bytes(lib_file.read_bytes())
+        lib_file.write_text(new_text, encoding="utf-8", newline="")
+
+        summary = (
+            f"Renamed pin {pin_number} on '{symbol_name}' to '{new_name}'"
+            + (f" (type='{new_type}')" if changed_type else "")
+            + f" in {lib_file.name}. Backup: {backup.name}."
+        )
+        return summary
 
     @mcp.tool()
     @headless_compatible

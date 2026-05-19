@@ -219,6 +219,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "lib_generate_symbol_from_pintable",
             "lib_recommend_part",
             "lib_bind_part_to_symbol",
+            "lib_set_pin_name",
         ],
     },
     "export": {
