@@ -130,6 +130,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_set_footprint_layer",
             "pcb_set_footprint_attributes",
             "pcb_sync_from_schematic",
+            "pcb_diff_from_netlist",
             "add_footprint_inner_layer_graphic",
             "pcb_add_barcode",
             "pcb_block_create_from_selection",

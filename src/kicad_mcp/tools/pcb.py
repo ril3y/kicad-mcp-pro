@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
 import uuid
@@ -39,6 +40,7 @@ from ..connection import (
     board_transaction,
     get_board,
 )
+from ..discovery import find_kicad_user_env_vars
 from ..models.common import _FootprintAttributesLike, _FootprintLike, _PadLike
 from ..models.pcb import (
     AddCircleInput,
@@ -1452,6 +1454,40 @@ def _inner_layer_graphic_block(
     raise ValueError("shape_type must be one of: line, rect, text.")
 
 
+def _expand_kicad_lib_uri(uri: str, project_dir: Path | None) -> str:
+    """Expand KiCad-style ``${VAR}`` placeholders in an ``fp-lib-table`` URI.
+
+    Substitutes, in order of decreasing precedence (KiCad GUI behavior):
+      1. ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> project_dir
+      2. Process environment (``os.environ``) — matches what the GUI
+         does when its own runtime sees an overriding env var (e.g. a CI
+         job exporting ``EASYEDA2KICAD`` in shell). Pre-this-precedence
+         change the OS env was ignored entirely.
+      3. User-defined vars from ``kicad_common.json::environment.vars``
+         (KiCad ``Preferences > Configure Paths``). These are the
+         normal source for things like ``${EASYEDA2KICAD}``,
+         ``${MY_LIBS}`` — KiCad itself only injects them when the GUI
+         is running, so we read them out of the config file.
+
+    Unknown placeholders are left intact so the caller's ``exists()``
+    probe fails loudly rather than dispatching to a partially-
+    substituted path.
+    """
+    if project_dir is not None:
+        uri = uri.replace("${KIPRJMOD}", str(project_dir))
+        uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    # OS env wins over kicad_common.json — matches the GUI's documented
+    # precedence per `kicad/include/env_paths.h` (OS env consulted before
+    # falling back to the config-file mapping).
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
+    for key, value in find_kicad_user_env_vars().items():
+        uri = uri.replace("${" + key + "}", value)
+    return uri
+
+
 def _footprint_file(library: str, footprint: str) -> Path:
     """Resolve a ``Library:Footprint`` reference to a ``.kicad_mod`` path.
 
@@ -1461,10 +1497,11 @@ def _footprint_file(library: str, footprint: str) -> Path:
     through KiCad's GUI library resolver. KiCad's S-expression
     ``fp-lib-table`` carries entries of the form
     ``(lib (name "x") (type "KiCad") (uri "${KIPRJMOD}/foo.pretty") ...)``
-    — we parse the ``name`` / ``uri`` pair, expand the standard project
-    variables (``${KIPRJMOD}`` and ``${KICAD_PROJECT_DIR}``), and probe the
-    candidate ``.kicad_mod`` file. Falls through to the global directory if
-    the table is missing, the entry is absent, or the candidate doesn't
+    or ``(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") ...)`` — we parse
+    the ``name`` / ``uri`` pair, expand both the standard project variables
+    AND user-defined env vars from ``kicad_common.json``, then probe the
+    candidate ``.kicad_mod`` file. Falls through to the global directory
+    if the table is missing, the entry is absent, or the candidate doesn't
     exist on disk — preserves the legacy single-source behavior.
     """
     cfg = get_config()
@@ -1483,10 +1520,8 @@ def _footprint_file(library: str, footprint: str) -> Path:
             )
             match = entry_pattern.search(table_text)
             if match:
-                uri = match.group(1)
-                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
-                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
-                candidate = Path(uri) / f"{footprint}.kicad_mod"
+                expanded = _expand_kicad_lib_uri(match.group(1), cfg.project_dir)
+                candidate = Path(expanded) / f"{footprint}.kicad_mod"
                 if candidate.exists():
                     return candidate
     if cfg.footprint_library_dir is None or not cfg.footprint_library_dir.exists():
@@ -1517,32 +1552,167 @@ def _replace_property_value(block: str, field_name: str, value: str) -> str:
     return pattern.sub(lambda match: f"{match.group(1)}{_sexpr_string(value)}", block, count=1)
 
 
-def _set_pad_net_name(pad_block: str, net_name: str) -> str:
-    net_pattern = re.compile(rf"(\(net\s+){STRING_PATTERN}")
-    if net_pattern.search(pad_block):
-        return net_pattern.sub(
-            lambda match: f"{match.group(1)}{_sexpr_string(net_name)}",
-            pad_block,
-            count=1,
-        )
+def _set_pad_net_name(pad_block: str, net_name: str, net_code: int | None = None) -> str:
+    """Replace the ``(net ...)`` clause inside a pad block with ``net_name``.
+
+    Tolerates both serialization forms KiCad uses:
+
+      ``(net "/GND_RTN")``       - bare-name form (no integer code)
+      ``(net 12 "/GND_RTN")``    - canonical form with the .kicad_pcb's
+                                   integer code; this is what real boards
+                                   carry, and net codes are the load-time
+                                   identifier pcbnew uses internally
+
+    When ``net_code`` is supplied (caller looked it up in the top-level
+    net table), the rewrite emits the canonical form. When it's omitted,
+    an existing integer is preserved across the rename, or the bare-name
+    form is written. Before this fix the regex only matched the
+    bare-name form, so against a real board (which always uses the
+    integer form) it fell through to the append branch and produced two
+    contradictory ``(net ...)`` clauses on the same pad.
+    """
+    net_pattern = re.compile(rf"\(net\s+(\d+)?\s*{STRING_PATTERN}\)")
+    match = net_pattern.search(pad_block)
+    if match is not None:
+        if net_code is not None:
+            replacement = f"(net {net_code} {_sexpr_string(net_name)})"
+        elif match.group(1):
+            replacement = f"(net {match.group(1)} {_sexpr_string(net_name)})"
+        else:
+            replacement = f"(net {_sexpr_string(net_name)})"
+        return pad_block[: match.start()] + replacement + pad_block[match.end() :]
     insert_at = pad_block.rfind("\n)")
     if insert_at == -1:
         insert_at = pad_block.rfind(")")
     if insert_at == -1:
         return pad_block
-    return pad_block[:insert_at] + f"\n\t\t(net {_sexpr_string(net_name)})" + pad_block[insert_at:]
+    if net_code is not None:
+        new_clause = f"\n\t\t(net {net_code} {_sexpr_string(net_name)})"
+    else:
+        new_clause = f"\n\t\t(net {_sexpr_string(net_name)})"
+    return pad_block[:insert_at] + new_clause + pad_block[insert_at:]
 
 
-def _assign_pad_nets(block: str, pad_nets: dict[str, str]) -> str:
+def _parse_pcb_net_table(content: str) -> dict[str, int]:
+    """Return ``{net_name: code}`` from the top-level ``(net N "name")``
+    entries inside ``(kicad_pcb ...)``. Boards that have never been
+    synced through pcbnew (or that were assembled by a previous
+    headless-sync round) may have zero entries — pcbnew tolerates
+    bare-name pad clauses in that case. The caller decides whether to
+    emit canonical integer-coded clauses based on whether this returns
+    a non-empty mapping.
+    """
+    table: dict[str, int] = {}
+    for match in re.finditer(rf"\(net\s+(\d+)\s+{STRING_PATTERN}\s*\)", content):
+        try:
+            code = int(match.group(1))
+        except ValueError:
+            continue
+        name = match.group(2)
+        # Skip clauses that sit INSIDE a (pad ...) — only top-level
+        # entries count. We don't have a real s-expression parser here,
+        # so use a cheap heuristic: top-level net entries appear
+        # immediately after a newline + a single tab; pad-level ones
+        # are nested deeper (two-plus tabs) or inline on the pad's line.
+        start = match.start()
+        line_start = content.rfind("\n", 0, start)
+        prefix = content[line_start + 1 : start] if line_start >= 0 else content[:start]
+        if prefix != "\t":
+            continue
+        if name not in table:
+            table[name] = code
+    return table
+
+
+def _allocate_pcb_net_codes(
+    existing: dict[str, int],
+    new_net_names: set[str],
+) -> tuple[dict[str, int], list[tuple[int, str]]]:
+    """Allocate integer codes for net names that aren't yet in ``existing``.
+
+    Returns ``(combined_table, new_entries)`` where ``combined_table``
+    maps every name (existing + new) to its code and ``new_entries`` is
+    the ordered ``(code, name)`` list of additions the caller must
+    inject into the top-level net table on disk.
+    """
+    combined = dict(existing)
+    next_code = (max(existing.values()) + 1) if existing else 1
+    new_entries: list[tuple[int, str]] = []
+    for name in sorted(new_net_names):
+        if name in combined:
+            continue
+        combined[name] = next_code
+        new_entries.append((next_code, name))
+        next_code += 1
+    return combined, new_entries
+
+
+def _inject_pcb_net_table_entries(content: str, new_entries: list[tuple[int, str]]) -> str:
+    """Insert new ``(net <code> "name")`` lines into the top-level net
+    table. If a table already exists, append after the last entry; if
+    no table exists, slot the new block right after ``(setup ...)`` so
+    KiCad's loader sees nets defined before any footprint references
+    them.
+    """
+    if not new_entries:
+        return content
+    new_lines = "\n".join(f"\t(net {code} {_sexpr_string(name)})" for code, name in new_entries)
+
+    # Find last existing top-level net entry
+    last_match = None
+    for match in re.finditer(rf"\n\t\(net\s+\d+\s+{STRING_PATTERN}\s*\)", content):
+        last_match = match
+    if last_match is not None:
+        insert_at = last_match.end()
+        return content[:insert_at] + "\n" + new_lines + content[insert_at:]
+
+    # No existing table — insert after (setup ...) so it precedes any
+    # footprint blocks that will reference these nets.
+    setup_match = re.search(r"\n\t\(setup\b", content)
+    if setup_match is not None:
+        # Balance-extract the setup block to find its closing paren.
+        setup_block, length = _extract_block(content, setup_match.start() + 1)
+        if setup_block:
+            insert_at = setup_match.start() + 1 + length
+            return content[:insert_at] + "\n" + new_lines + content[insert_at:]
+
+    # Last resort: insert right before the first (footprint ...) block.
+    fp_match = re.search(r"\n\t\(footprint\s", content)
+    if fp_match is not None:
+        return content[: fp_match.start()] + "\n" + new_lines + content[fp_match.start() :]
+
+    return content + "\n" + new_lines
+
+
+def _assign_pad_nets(
+    block: str,
+    pad_nets: dict[str, str],
+    net_codes: dict[str, int] | None = None,
+) -> str:
+    """Rewrite every named pad's ``(net ...)`` clause in ``block``.
+
+    When ``net_codes`` is supplied, the rewrite uses canonical
+    ``(net <code> "name")`` form, ensuring the pad references the same
+    integer code KiCad's loader reads from the top-level net table. Without
+    it, an existing integer code is preserved and only the name changes —
+    safe for in-place renames, but unsafe for net REASSIGNMENTS where the
+    pad is being moved from one logical net to another.
+    """
     rebuilt: list[str] = []
     cursor = 0
+    codes = net_codes or {}
     while cursor < len(block):
         if block[cursor:].startswith("(pad"):
             pad_block, length = _extract_block(block, cursor)
             if pad_block:
                 pad_match = re.match(rf"\(pad\s+{STRING_PATTERN}", pad_block.lstrip())
                 if pad_match and pad_match.group(1) in pad_nets:
-                    pad_block = _set_pad_net_name(pad_block, pad_nets[pad_match.group(1)])
+                    target_name = pad_nets[pad_match.group(1)]
+                    pad_block = _set_pad_net_name(
+                        pad_block,
+                        target_name,
+                        net_code=codes.get(target_name),
+                    )
                 rebuilt.append(pad_block)
                 cursor += length
                 continue
@@ -1593,6 +1763,14 @@ def _render_board_footprint_block(
         block,
         count=1,
     )
+    # Stand-alone .kicad_mod libraries ship deterministic UUIDs on every
+    # pad and graphic element. Embedding the same library file twice
+    # (e.g. two SOT-23 instances) without re-rolling these would have
+    # the new footprints sharing UUIDs with each other — pcbnew accepts
+    # it, but every UUID-keyed downstream tool (selections, change-
+    # tracking, IPC referents) silently breaks. Roll fresh UUIDs for
+    # every element.
+    block = _refresh_uuid_fields(block)
     block = _replace_property_value(block, "Reference", reference)
     block = _replace_property_value(block, "Value", value)
     block = _assign_pad_nets(block, pad_nets)
@@ -1838,6 +2016,221 @@ def _planned_board_positions(
             }
         )
     return positions
+
+
+# ---------------------------------------------------------------------------
+# Headless "Update PCB from Schematic" (the F8 menu action) — file-based
+# implementation that bypasses pcbnew's in-process eeschema loader. We
+# generate the netlist with ``kicad-cli sch export netlist`` and compare it
+# against the .kicad_pcb on disk, so the result is identical regardless of
+# whether KiCad's GUI is open (and immune to its in-memory caching).
+#
+# The legacy ``_parse_netlist_text`` parser above expects the older
+# single-line node form (``(node (ref "X") (pin "Y"))``) and silently
+# returns an empty map against KiCad 10's actual multi-line output. The
+# helpers below balance-extract each block so they cope with either layout.
+# ---------------------------------------------------------------------------
+
+
+def _run_kicad_cli_netlist_export(sch_path: Path, out_path: Path) -> tuple[int, str]:
+    """Run ``kicad-cli sch export netlist --format kicadsexpr``.
+
+    Returns ``(returncode, combined_stdout_stderr)``. Tries the modern
+    positional-input form first; falls back to the older ``--input`` form
+    if the positional one is rejected (older kicad-cli builds shipped both
+    spellings during the 9.0/10.0 transition).
+    """
+    cfg = get_config()
+    if not cfg.kicad_cli.exists():
+        return -1, "kicad-cli binary is not available."
+    variants = [
+        [
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadsexpr",
+            "--output",
+            str(out_path),
+            str(sch_path),
+        ],
+        [
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadsexpr",
+            "--input",
+            str(sch_path),
+            "--output",
+            str(out_path),
+        ],
+    ]
+    last_msg = "unknown error"
+    for variant in variants:
+        try:
+            result = subprocess.run(
+                [str(cfg.kicad_cli), *variant],
+                capture_output=True,
+                text=True,
+                timeout=cfg.cli_timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_msg = f"{type(exc).__name__}: {exc}"
+            continue
+        if result.returncode == 0 and out_path.exists():
+            return 0, (result.stdout + result.stderr).strip()
+        last_msg = (result.stderr or result.stdout or "kicad-cli failed").strip()
+    return 1, last_msg
+
+
+def _parse_netlist_components(text: str) -> dict[str, dict[str, str]]:
+    """Parse the ``(comp ...)`` entries of a kicadsexpr netlist."""
+    components: dict[str, dict[str, str]] = {}
+    for m in re.finditer(r"\(comp\s", text):
+        block, _ = _extract_block(text, m.start())
+        ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", block)
+        if not ref_m or not ref_m.group(1):
+            continue
+        ref = ref_m.group(1)
+        value_m = re.search(rf"\(value\s+{STRING_PATTERN}\)", block)
+        fp_m = re.search(rf"\(footprint\s+{STRING_PATTERN}\)", block)
+        components[ref] = {
+            "value": value_m.group(1) if value_m else "",
+            "footprint": fp_m.group(1) if fp_m else "",
+        }
+    return components
+
+
+def _parse_netlist_net_nodes(block: str) -> list[tuple[str, str]]:
+    """Parse the ``(node ...)`` children of a single netlist ``(net ...)`` block."""
+    nodes: list[tuple[str, str]] = []
+    for nm in re.finditer(r"\(node\s", block):
+        node_block, _ = _extract_block(block, nm.start())
+        ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", node_block)
+        pin_m = re.search(rf"\(pin\s+{STRING_PATTERN}\)", node_block)
+        if ref_m and pin_m and ref_m.group(1) and pin_m.group(1):
+            nodes.append((ref_m.group(1), pin_m.group(1)))
+    return nodes
+
+
+def _parse_kicadsexpr_netlist(
+    text: str,
+) -> tuple[dict[str, dict[str, str]], dict[str, list[tuple[str, str]]]]:
+    """Parse a ``kicadsexpr``-format netlist into components + nets.
+
+    Returns ``(components_by_ref, nets_by_name)`` where:
+      - ``components_by_ref[ref]`` → ``{"value": ..., "footprint": ...}``
+      - ``nets_by_name[net]`` → ``[(ref, pin), ...]``
+
+    Robust against both single-line and multi-line node serializations
+    (KiCad 10's kicad-cli emits multi-line — `(node\\n\\t(ref ...)`).
+    """
+    components = _parse_netlist_components(text)
+    nets: dict[str, list[tuple[str, str]]] = {}
+    for m in re.finditer(r"\(net\s+\(code\s", text):
+        block, _ = _extract_block(text, m.start())
+        name_m = re.search(rf"\(name\s+{STRING_PATTERN}\)", block)
+        if not name_m:
+            continue
+        nets[name_m.group(1)] = _parse_netlist_net_nodes(block)
+    return components, nets
+
+
+def _diff_pcb_against_netlist(
+    nl_components: dict[str, dict[str, str]],
+    nl_nets: dict[str, list[tuple[str, str]]],
+    pcb_footprints: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute what an Update-PCB-from-Schematic would change.
+
+    Outputs a structured diff:
+      - ``additions``: schematic refs not on the PCB (need to be placed)
+      - ``removals``: PCB refs not in the schematic (would be deleted)
+      - ``footprint_mismatches``: same ref, different footprint name
+      - ``net_changes``: pad-level net reassignments on existing footprints
+    """
+    nl_refs = set(nl_components)
+    pcb_refs = set(pcb_footprints)
+    additions = sorted(nl_refs - pcb_refs)
+    removals = sorted(pcb_refs - nl_refs)
+    common = nl_refs & pcb_refs
+
+    footprint_mismatches: list[tuple[str, str, str]] = []
+    for ref in sorted(common):
+        nl_fp = nl_components[ref]["footprint"]
+        pcb_fp = str(pcb_footprints[ref].get("name", ""))
+        if nl_fp and pcb_fp and nl_fp != pcb_fp:
+            footprint_mismatches.append((ref, pcb_fp, nl_fp))
+
+    # Flatten netlist nodes to (ref, pin) -> net
+    nl_pad_nets: dict[tuple[str, str], str] = {}
+    for net_name, nodes in nl_nets.items():
+        for ref, pin in nodes:
+            nl_pad_nets[(ref, pin)] = net_name
+
+    net_changes: list[tuple[str, str, str, str]] = []
+    for (ref, pin), nl_net in nl_pad_nets.items():
+        if ref not in pcb_footprints:
+            continue
+        pcb_pad_nets = cast(dict[str, str], pcb_footprints[ref].get("pad_nets", {}))
+        pcb_net = pcb_pad_nets.get(pin, "")
+        if pcb_net != nl_net:
+            net_changes.append((ref, pin, pcb_net, nl_net))
+    net_changes.sort()
+
+    return {
+        "additions": additions,
+        "removals": removals,
+        "footprint_mismatches": footprint_mismatches,
+        "net_changes": net_changes,
+    }
+
+
+def _format_pcb_netlist_diff_report(
+    diff: dict[str, Any],
+    nl_components: dict[str, dict[str, str]],
+) -> str:
+    """Render a structured diff into a human-readable report for the MCP
+    response. Caps each section so a giant board doesn't blow the context
+    window — first 30 entries shown, count + "and N more" beyond that."""
+    additions = cast(list[str], diff["additions"])
+    removals = cast(list[str], diff["removals"])
+    footprint_mismatches = cast(list[tuple[str, str, str]], diff["footprint_mismatches"])
+    net_changes = cast(list[tuple[str, str, str, str]], diff["net_changes"])
+
+    lines: list[str] = ["Headless F8 (Update PCB from Schematic) diff:"]
+
+    lines.append(f"  Add to PCB: {len(additions)} footprint(s)")
+    for ref in additions[:30]:
+        info = nl_components.get(ref, {})
+        lines.append(
+            f"    + {ref:8s} {info.get('footprint', ''):42s} value={info.get('value', '')}"
+        )
+    if len(additions) > 30:
+        lines.append(f"    ... and {len(additions) - 30} more")
+
+    lines.append(f"  Remove from PCB: {len(removals)} footprint(s)")
+    for ref in removals[:30]:
+        lines.append(f"    - {ref}")
+    if len(removals) > 30:
+        lines.append(f"    ... and {len(removals) - 30} more")
+
+    lines.append(f"  Footprint mismatches: {len(footprint_mismatches)}")
+    for ref, pcb_fp, nl_fp in footprint_mismatches[:30]:
+        lines.append(f"    ~ {ref}: {pcb_fp} -> {nl_fp}")
+    if len(footprint_mismatches) > 30:
+        lines.append(f"    ... and {len(footprint_mismatches) - 30} more")
+
+    lines.append(f"  Net changes on existing pads: {len(net_changes)}")
+    for ref, pin, pcb_net, nl_net in net_changes[:40]:
+        old = pcb_net or "(none)"
+        lines.append(f"    {ref}.{pin}: {old} -> {nl_net}")
+    if len(net_changes) > 40:
+        lines.append(f"    ... and {len(net_changes) - 40} more")
+
+    return "\n".join(lines)
 
 
 def register(mcp: FastMCP) -> None:
@@ -3086,6 +3479,255 @@ def register(mcp: FastMCP) -> None:
             f"Added {shape_type} inner-layer graphic to footprint '{reference}' "
             f"on {canonical_layer}."
         )
+
+    @mcp.tool()
+    @headless_compatible
+    def pcb_diff_from_netlist(
+        apply: bool = False,
+        origin_x_mm: float = 20.0,
+        origin_y_mm: float = 20.0,
+        grid_mm: float = 2.54,
+        backup: bool = True,
+    ) -> str:
+        """Report (and optionally apply) what F8 would change, headlessly.
+
+        Drives netlist generation via ``kicad-cli sch export netlist``
+        (file-based), then diffs against the .kicad_pcb on disk. Bypasses
+        pcbnew's in-process eeschema loader entirely — result is the
+        same whether KiCad's GUI is open or closed.
+
+        ``apply=False`` (default): read-only diff report.
+        ``apply=True``: mutate the .kicad_pcb file:
+          - Adds missing footprints with pad-level net assignments from
+            the netlist. New footprints are auto-placed on a grid
+            starting at (origin_x_mm, origin_y_mm); move them in pcbnew
+            afterwards.
+          - Rewrites pad nets on existing footprints when the netlist
+            disagrees with the current board (stale assignments from an
+            earlier botched sync).
+          - Does NOT remove orphan footprints or change footprint names
+            on mismatches — those need an explicit confirmation flow.
+            Use pcb_sync_from_schematic(replace_mismatched=True) for
+            footprint renames; remove orphans manually.
+
+        Returns a report listing applied additions, applied net rewrites,
+        and any skipped operations (e.g. footprints whose library lookup
+        failed — those need ``kicad_common.json``'s env var pointing at
+        the right ``.pretty`` directory).
+        """
+        cfg = get_config()
+        if cfg.sch_file is None or not cfg.sch_file.exists():
+            return (
+                "No schematic file is configured. "
+                "Call kicad_set_project() or set KICAD_MCP_SCH_FILE."
+            )
+        pcb_path = _get_pcb_file_for_sync()
+        out_dir = cfg.ensure_output_dir("netlist")
+        netlist_out = out_dir / "pcb_diff.net"
+        code, msg = _run_kicad_cli_netlist_export(cfg.sch_file, netlist_out)
+        if code != 0:
+            return (
+                f"Netlist generation failed (kicad-cli exit {code}): {msg}\n"
+                "This is the same parsing path F8 would use, so F8 would also fail."
+            )
+
+        netlist_text = netlist_out.read_text(encoding="utf-8")
+        nl_components, nl_nets = _parse_kicadsexpr_netlist(netlist_text)
+        pcb_text = pcb_path.read_text(encoding="utf-8")
+        pcb_footprints = _parse_board_footprint_blocks(pcb_text)
+        diff = _diff_pcb_against_netlist(nl_components, nl_nets, pcb_footprints)
+
+        report_header = ""
+        if msg:
+            report_header = f"kicad-cli output: {msg}\n\n"
+
+        if not apply:
+            return (
+                report_header
+                + _format_pcb_netlist_diff_report(diff, nl_components)
+                + ("\n\nRe-run with apply=True to write these changes into the .kicad_pcb.")
+            )
+
+        # Build (ref, pin) -> net_name map for pad rewrites
+        nl_pad_nets: dict[tuple[str, str], str] = {}
+        for net_name, nodes in nl_nets.items():
+            for ref, pin in nodes:
+                nl_pad_nets[(ref, pin)] = net_name
+
+        # Resolve canonical integer codes for every net the netlist
+        # references. Without this, new pads (and rewritten pads) emit
+        # bare-name (net "...") clauses that pcbnew loads as net 0 when
+        # the board carries a populated top-level net table — see the
+        # kicad-pcb-expert audit on PR #20.
+        existing_net_table = _parse_pcb_net_table(pcb_text)
+        net_codes, new_net_entries = _allocate_pcb_net_codes(
+            existing_net_table,
+            set(nl_nets.keys()),
+        )
+
+        additions_to_apply: list[str] = []
+        skipped_additions: list[tuple[str, str]] = []  # (ref, reason)
+        replacements: dict[str, str] = {}
+
+        # Track every footprint position (existing + newly-placed) so we
+        # don't drop a new footprint on top of an existing one. The
+        # naive 8-column grid the audit flagged as a P1 hazard would put
+        # the first new component at (origin_x_mm, origin_y_mm) blindly,
+        # colliding with whatever the user has there.
+        occupied_centers: list[tuple[float, float]] = [
+            (float(info["x_mm"]), float(info["y_mm"]))
+            for info in pcb_footprints.values()
+            if info.get("x_mm") is not None and info.get("y_mm") is not None
+        ]
+        collision_radius_mm = grid_mm * 4.0
+
+        def _next_clear_grid_slot(start_index: int) -> tuple[float, float, int]:
+            """Walk the 8-column grid starting at ``start_index`` until
+            we find a (x, y) at least ``collision_radius_mm`` from every
+            currently-occupied center. Returns ``(x, y, next_index)``."""
+            slot = start_index
+            for _ in range(start_index, start_index + 512):
+                col = slot % 8
+                row = slot // 8
+                x = origin_x_mm + col * grid_mm * 8.0
+                y = origin_y_mm + row * grid_mm * 8.0
+                if all(
+                    (x - cx) ** 2 + (y - cy) ** 2 >= collision_radius_mm**2
+                    for cx, cy in occupied_centers
+                ):
+                    return x, y, slot + 1
+                slot += 1
+            # Fallback: 512 slots was enough to wrap several times; if
+            # we still haven't found one, just take whatever's next.
+            col = slot % 8
+            row = slot // 8
+            return (
+                origin_x_mm + col * grid_mm * 8.0,
+                origin_y_mm + row * grid_mm * 8.0,
+                slot + 1,
+            )
+
+        # ---- Additions ----
+        cap_additions = cast(list[str], diff["additions"])
+        grid_slot = 0
+        for ref in cap_additions:
+            info = nl_components.get(ref, {})
+            footprint_assignment = info.get("footprint", "")
+            value = info.get("value", "")
+            if not footprint_assignment:
+                skipped_additions.append((ref, "no footprint assigned in schematic"))
+                continue
+            x, y, grid_slot = _next_clear_grid_slot(grid_slot)
+            occupied_centers.append((x, y))
+            pad_nets = {pin: net for (r, pin), net in nl_pad_nets.items() if r == ref}
+            try:
+                block = _render_board_footprint_block(
+                    footprint_assignment,
+                    reference=ref,
+                    value=value,
+                    x_mm=x,
+                    y_mm=y,
+                    rotation=0,
+                    pad_nets=pad_nets,
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                skipped_additions.append((ref, f"{type(exc).__name__}: {exc}"))
+                continue
+            # _render_board_footprint_block emits bare-name pad clauses
+            # via _assign_pad_nets without a net_codes map. Upgrade them
+            # to canonical (net N "name") form in-place so pcbnew loads
+            # them against the freshly-allocated top-level entries.
+            block = _assign_pad_nets(block, pad_nets, net_codes=net_codes)
+            additions_to_apply.append(block)
+
+        # ---- Net changes on existing footprints ----
+        # Group net changes by reference so we update each footprint once.
+        changes_by_ref: dict[str, dict[str, str]] = {}
+        for ref, pin, _old, new in cast(list[tuple[str, str, str, str]], diff["net_changes"]):
+            changes_by_ref.setdefault(ref, {})[pin] = new
+        for ref, pad_changes in changes_by_ref.items():
+            existing = pcb_footprints.get(ref)
+            if existing is None:
+                # Shouldn't happen — net_changes are scoped to existing refs.
+                continue
+            new_block = _assign_pad_nets(
+                str(existing["block"]),
+                pad_changes,
+                net_codes=net_codes,
+            )
+            replacements[ref] = new_block
+
+        applied_anything = bool(additions_to_apply or replacements or new_net_entries)
+        backup_path: Path | None = None
+        if applied_anything and backup:
+            # Take a one-shot backup before mutating. Unlike pcbnew's F8
+            # (which is in-process undoable), our mutation is a direct
+            # file write — without a snapshot a botched apply has no
+            # recovery path. Filename uses a fixed suffix so successive
+            # apply calls overwrite the same file rather than littering
+            # the project dir.
+            backup_path = pcb_path.with_suffix(pcb_path.suffix + ".bak-pre-sync")
+            backup_path.write_bytes(pcb_path.read_bytes())
+        if applied_anything:
+            _transactional_board_write(
+                lambda current: _replace_board_blocks(
+                    _inject_pcb_net_table_entries(current, new_net_entries),
+                    replacements,
+                    additions_to_apply,
+                )
+            )
+
+        # ---- Report ----
+        out_lines = [report_header.rstrip(), "Headless F8 apply summary:"]
+        if new_net_entries:
+            out_lines.append(
+                f"  New net-table entries injected: {len(new_net_entries)} "
+                '(canonical (net N "name") form added at top of .kicad_pcb)'
+            )
+        out_lines.append(f"  Footprints added: {len(additions_to_apply)}")
+        for ref in cap_additions:
+            if ref not in {r for r, _ in skipped_additions}:
+                fp = nl_components.get(ref, {}).get("footprint", "")
+                out_lines.append(f"    + {ref:8s} {fp}")
+        if skipped_additions:
+            out_lines.append(f"  Additions skipped: {len(skipped_additions)}")
+            for ref, reason in skipped_additions[:30]:
+                out_lines.append(f"    ! {ref:8s} {reason}")
+            if len(skipped_additions) > 30:
+                out_lines.append(f"    ... and {len(skipped_additions) - 30} more")
+        out_lines.append(f"  Existing footprints with pad-net rewrites: {len(replacements)}")
+        for ref in sorted(replacements):
+            changed_pads = changes_by_ref[ref]
+            pin_summary = ", ".join(
+                f"{pin}->{net}" for pin, net in sorted(changed_pads.items())[:4]
+            )
+            if len(changed_pads) > 4:
+                pin_summary += f", +{len(changed_pads) - 4} more"
+            out_lines.append(f"    ~ {ref}: {pin_summary}")
+        if cast(list[str], diff["removals"]):
+            out_lines.append(
+                f"  Not handled: {len(cast(list[str], diff['removals']))} orphan footprint(s) "
+                "on the PCB (use pcbnew to remove or call a future apply-mode flag)."
+            )
+        if cast(list[Any], diff["footprint_mismatches"]):
+            out_lines.append(
+                f"  Not handled: {len(cast(list[Any], diff['footprint_mismatches']))} "
+                "footprint name mismatch(es). Use pcb_sync_from_schematic("
+                "replace_mismatched=True)."
+            )
+        if not applied_anything:
+            out_lines.append("  (no changes applied)")
+        if applied_anything and backup_path is not None:
+            out_lines.append(f"  Backup written to: {backup_path}")
+        if applied_anything:
+            # File-based mutation; any open pcbnew has stale in-memory state.
+            # Mirror the schematic-side SAVED_NO_DOC wording so an agent sees
+            # the same shape on either side of the sync.
+            out_lines.append(
+                "Reopen the .kicad_pcb in pcbnew (or File > Revert if it's "
+                "already open) so the editor sees the new state."
+            )
+        return "\n".join(out_lines)
 
     @mcp.tool()
     @headless_compatible
