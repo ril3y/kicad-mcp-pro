@@ -16,7 +16,7 @@ KiCad MCP Pro is a Model Context Protocol server for KiCad PCB and schematic wor
 
 Use it with Claude Desktop, Claude Code, Cursor, VS Code, Codex, or any MCP-compatible client.
 
-Fork of `oaslananka/kicad-mcp-pro` — see [CLAUDE.md](CLAUDE.md) for fork-specific notes.
+Fork of `oaslananka/kicad-mcp-pro`.
 
 ## Quick Start
 
