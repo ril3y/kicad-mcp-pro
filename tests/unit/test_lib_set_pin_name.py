@@ -108,9 +108,12 @@ def test_lib_set_pin_name_renames_pin_and_persists_change(tmp_path: Path, monkey
 
     assert "Renamed pin 1" in result
     assert "Coil1" in result
-    # Backup file exists
-    backup = lib.with_suffix(lib.suffix + ".bak-pre-rename")
-    assert backup.exists()
+    # Backup file exists.  After the 2026-05-19 hardening, the backup
+    # uses a timestamped name ``<file>.bak-pre-lib_set_pin_name-<UTC>``
+    # rather than the fixed ``bak-pre-rename`` suffix the original tool
+    # produced — same restore semantics, plus traceability.
+    backups = list(lib.parent.glob(f"{lib.name}.bak-pre-lib_set_pin_name-*"))
+    assert len(backups) == 1, f"Expected one timestamped backup, found {backups}"
     # The live file has the new name
     new_text = lib.read_text(encoding="utf-8")
     assert '(name "Coil1"' in new_text

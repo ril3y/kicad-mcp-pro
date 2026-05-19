@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from ..utils.sym_lib_editor import (
     set_pin_type,
     validate_via_kicad_cli,
 )
+from . import _schematic_hardening as hardening
 from .metadata import headless_compatible
 from .schematic import get_schematic_backend, project_schematic_files, update_symbol_property
 
@@ -572,14 +574,41 @@ def register(mcp: FastMCP) -> None:
                 + f". Validated via kicad-cli ({msg or 'no output'})."
             )
 
-        backup = lib_file.with_suffix(lib_file.suffix + ".bak-pre-rename")
-        backup.write_bytes(lib_file.read_bytes())
-        lib_file.write_text(new_text, encoding="utf-8", newline="")
+        # Hardening — refuse to mutate if the symbol editor (or any KiCad
+        # editor that locks the library file) is holding it open, and
+        # create a timestamped backup so we can restore on a failed
+        # post-write validation pass.  Mirrors the schematic-write
+        # hardening added after the 2026-05-19 incident.
+        try:
+            hardening.raise_if_locked(lib_file, None)
+            backup_path = hardening.create_backup(lib_file, "lib_set_pin_name")
+        except hardening.HardeningError as exc:
+            return json.dumps(exc.to_payload(), ensure_ascii=False)
+
+        try:
+            lib_file.write_text(new_text, encoding="utf-8", newline="")
+        except OSError as exc:
+            hardening.restore_backup(backup_path, lib_file)
+            return f"Refusing to leave a half-written library file: {exc}"
+
+        # kicad-cli already validated the in-memory text above; we still
+        # re-run a sym-upgrade pass against the persisted file to catch
+        # any disk-side surprises.  On failure restore from the backup.
+        re_ok, re_msg = validate_via_kicad_cli(
+            lib_file.read_text(encoding="utf-8"),
+            cfg.kicad_cli,
+        )
+        if not re_ok:
+            hardening.restore_backup(backup_path, lib_file)
+            return (
+                "Post-write kicad-cli validation failed; restored from "
+                f"backup {backup_path.name}.\n  {re_msg}"
+            )
 
         summary = (
             f"Renamed pin {pin_number} on '{symbol_name}' to '{new_name}'"
             + (f" (type='{new_type}')" if changed_type else "")
-            + f" in {lib_file.name}. Backup: {backup.name}."
+            + f" in {lib_file.name}. Backup: {backup_path.name}."
         )
         return summary
 
