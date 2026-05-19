@@ -8,7 +8,7 @@ import json
 import math
 import re
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,7 +112,7 @@ _active_hardening_tool: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 @contextlib.contextmanager
-def _hardening_tool_context(tool_name: str) -> Iterator[None]:
+def _hardening_tool_context(tool_name: str) -> Generator[None, None, None]:
     """Bind ``tool_name`` for the duration of a mutating call."""
     token = _active_hardening_tool.set(tool_name)
     try:

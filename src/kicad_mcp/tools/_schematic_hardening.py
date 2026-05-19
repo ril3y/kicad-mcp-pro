@@ -43,7 +43,7 @@ import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -157,13 +157,15 @@ def read_project_grid_mm(project_file: Path | None) -> float:
             project_file=str(project_file),
         )
         return DEFAULT_SCHEMATIC_GRID_MM
-    schematic_block = payload.get("schematic")
-    if not isinstance(schematic_block, dict):
+    payload_typed = cast(dict[str, object], payload)
+    schematic_block_raw = payload_typed.get("schematic")
+    if not isinstance(schematic_block_raw, dict):
         logger.debug(
             "hardening_project_grid_missing_schematic_block",
             project_file=str(project_file),
         )
         return DEFAULT_SCHEMATIC_GRID_MM
+    schematic_block = cast(dict[str, object], schematic_block_raw)
     raw = schematic_block.get("connection_grid_size")
     converted = _coerce_grid_value_to_mm(raw)
     if converted is None:
