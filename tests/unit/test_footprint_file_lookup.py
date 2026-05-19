@@ -278,6 +278,195 @@ def test_footprint_file_picks_correct_entry_among_multiple_libraries(
     assert resolved == target_pretty / "WANTED.kicad_mod"
 
 
+def test_footprint_file_expands_user_env_var_from_kicad_common(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-defined env vars (KiCad ``Preferences > Configure Paths``) live
+    in ``kicad_common.json::environment.vars`` — NOT in the OS environment.
+    The MCP server process must read them out of the config file before
+    expanding ``${EASYEDA2KICAD}`` and friends in ``fp-lib-table`` URIs,
+    otherwise headless flows fail with ``Footprint '...' was not found``
+    even when the file exists on disk. This was the junction-passive
+    repro: ``easyeda2kicad:CONN-TH_9-6437287-8`` raised FileNotFoundError
+    despite the file being present at ``${EASYEDA2KICAD}/...``.
+    """
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    # 1. The footprint lives under a directory referenced by a user env var.
+    libroot = tmp_path / "external_libs"
+    pretty_dir = libroot / "easyeda2kicad.pretty"
+    pretty_dir.mkdir(parents=True)
+    (pretty_dir / "CONN-TH_9-6437287-8.kicad_mod").write_text(_FAKE_KICAD_MOD, encoding="utf-8")
+
+    # 2. Build a project whose fp-lib-table uses ${EASYEDA2KICAD}.
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # 3. The user env var is in KiCad's config, NOT the OS env. Surface it
+    #    through find_kicad_user_env_vars (the discovery helper the
+    #    resolver calls). This both pins the contract and exercises the
+    #    only entry point that knows about KiCad's user vars.
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(libroot)},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "CONN-TH_9-6437287-8")
+    assert resolved == pretty_dir / "CONN-TH_9-6437287-8.kicad_mod"
+
+
+def test_footprint_file_os_env_takes_precedence_over_kicad_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OS env wins over ``kicad_common.json`` — matches KiCad GUI
+    precedence (see ``env_paths.h``: process environment is checked
+    before the config-file mapping). This lets a CI runner that exports
+    ``EASYEDA2KICAD`` in shell override whatever the developer's
+    `Preferences > Configure Paths` happens to have, without modifying
+    config files."""
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    libroot_os = tmp_path / "from_os_env"
+    libroot_os.mkdir()
+    (libroot_os / "easyeda2kicad.pretty").mkdir()
+    (libroot_os / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
+        _FAKE_KICAD_MOD, encoding="utf-8"
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # OS env wins; kicad_common.json is the fallback for when the shell
+    # doesn't define the var. We point them at different directories so
+    # only the OS-env path actually contains the .kicad_mod file.
+    monkeypatch.setenv("EASYEDA2KICAD", str(libroot_os))
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(tmp_path / "from_kicad_config_should_lose")},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "PART")
+    assert resolved == libroot_os / "easyeda2kicad.pretty" / "PART.kicad_mod"
+
+
+def test_footprint_file_kicad_config_used_when_os_env_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the shell doesn't export the var, ``kicad_common.json`` is
+    consulted. This is the normal developer-machine path: KiCad's
+    GUI-managed `Configure Paths` mapping is the canonical source when
+    no OS env override is present."""
+    from kicad_mcp.tools.pcb import _footprint_file
+
+    libroot = tmp_path / "from_kicad_config"
+    libroot.mkdir()
+    (libroot / "easyeda2kicad.pretty").mkdir()
+    (libroot / "easyeda2kicad.pretty" / "PART.kicad_mod").write_text(
+        _FAKE_KICAD_MOD, encoding="utf-8"
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "fp-lib-table").write_text(
+        '(fp_lib_table\n  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${EASYEDA2KICAD}/easyeda2kicad.pretty") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, footprint_library_dir=None)
+
+    # Make sure the var is unset on the process side so the config-file
+    # path is the only available source.
+    monkeypatch.delenv("EASYEDA2KICAD", raising=False)
+    monkeypatch.setattr(
+        "kicad_mcp.tools.pcb.find_kicad_user_env_vars",
+        lambda: {"EASYEDA2KICAD": str(libroot)},
+    )
+
+    resolved = _footprint_file("easyeda2kicad", "PART")
+    assert resolved == libroot / "easyeda2kicad.pretty" / "PART.kicad_mod"
+
+
+def test_find_kicad_user_env_vars_reads_environment_vars_from_kicad_common(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The discovery helper reads ``environment.vars`` from
+    ``kicad_common.json``. Pinned here so the contract doesn't drift —
+    a refactor that walked the wrong JSON path would silently produce
+    an empty dict and break every downstream footprint lookup."""
+    import json
+
+    from kicad_mcp.discovery import find_kicad_user_env_vars
+
+    fake_config_dir = tmp_path / "kicad_config" / "10.0"
+    fake_config_dir.mkdir(parents=True)
+    (fake_config_dir / "kicad_common.json").write_text(
+        json.dumps(
+            {
+                "environment": {
+                    "vars": {
+                        "EASYEDA2KICAD": "X:/external/easyeda",
+                        "MY_LIBS": "X:/external/mylibs",
+                    }
+                },
+                # Unrelated keys we must not touch
+                "appearance": {"theme": "dark"},
+                "input": {"keymap": "default"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Patch _kicad_config_dirs to return our fake dir + clear lru_cache.
+    monkeypatch.setattr(
+        "kicad_mcp.discovery._kicad_config_dirs",
+        lambda: [fake_config_dir],
+    )
+    find_kicad_user_env_vars.cache_clear()
+
+    env = find_kicad_user_env_vars()
+    assert env == {
+        "EASYEDA2KICAD": "X:/external/easyeda",
+        "MY_LIBS": "X:/external/mylibs",
+    }
+
+
+def test_find_kicad_user_env_vars_returns_empty_when_no_config_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graceful degrade: no kicad_common.json at any candidate dir means
+    we return ``{}`` and fall through to the next resolution strategy.
+    Used to fail at startup when kicad_common.json was absent or
+    malformed."""
+    from kicad_mcp.discovery import find_kicad_user_env_vars
+
+    empty_dir = tmp_path / "no_kicad_config"
+    empty_dir.mkdir()
+    monkeypatch.setattr(
+        "kicad_mcp.discovery._kicad_config_dirs",
+        lambda: [empty_dir],
+    )
+    find_kicad_user_env_vars.cache_clear()
+
+    assert find_kicad_user_env_vars() == {}
+
+
 def test_render_board_footprint_block_rewrites_header_to_library_form(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

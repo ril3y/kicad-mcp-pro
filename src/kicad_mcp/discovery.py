@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import functools
 import inspect
 import json
 import platform
@@ -264,24 +265,74 @@ def discover_library_paths(cli_path: Path) -> dict[str, Path | None]:
     return {"root": None, "symbols": None, "footprints": None}
 
 
-def find_recent_projects(limit: int = 10) -> list[Path]:
-    """Find recently opened KiCad projects on this system."""
+def _kicad_config_dirs() -> list[Path]:
+    """Return candidate KiCad user-config directories for the current OS,
+    newest version first. Each directory may host a ``kicad_common.json``
+    that the GUI uses for env vars, library paths, and recent files.
+    """
     system = platform.system()
     if system == "Windows":
-        config_dirs = [
+        return [
             Path.home() / "AppData" / "Roaming" / "kicad" / "10.0",
             Path.home() / "AppData" / "Roaming" / "kicad" / "9.0",
         ]
-    elif system == "Darwin":
-        config_dirs = [Path.home() / "Library" / "Preferences" / "kicad" / "10.0"]
-    else:
-        config_dirs = [
-            Path.home() / ".config" / "kicad" / "10.0",
-            Path.home() / ".config" / "kicad" / "9.0",
+    if system == "Darwin":
+        return [
+            Path.home() / "Library" / "Preferences" / "kicad" / "10.0",
+            Path.home() / "Library" / "Preferences" / "kicad" / "9.0",
         ]
+    return [
+        Path.home() / ".config" / "kicad" / "10.0",
+        Path.home() / ".config" / "kicad" / "9.0",
+    ]
 
+
+@functools.lru_cache(maxsize=1)
+def find_kicad_user_env_vars() -> dict[str, str]:
+    """Return the ``environment.vars`` mapping from KiCad's
+    ``kicad_common.json`` (e.g. ``{"EASYEDA2KICAD": "X:/Dropbox/..."}``).
+
+    These are the user-defined environment variables KiCad exposes
+    via ``Preferences > Configure Paths`` — used inside ``fp-lib-table``
+    URIs like ``${EASYEDA2KICAD}/easyeda2kicad.pretty``. The Python
+    process running this MCP server does NOT inherit them from the OS;
+    they're a KiCad-internal namespace. Without this loader, headless
+    footprint lookups fail with ``Footprint '...' was not found`` even
+    when the file exists.
+
+    Cached with ``lru_cache(maxsize=1)`` because a large board can
+    trigger thousands of footprint lookups during a sync; the JSON read
+    is ~100 µs per call which adds up. Call
+    ``find_kicad_user_env_vars.cache_clear()`` in tests when monkey-
+    patching ``_kicad_config_dirs``.
+
+    Returns an empty dict if no config is found.
+    """
+    for config_dir in _kicad_config_dirs():
+        common = config_dir / "kicad_common.json"
+        if not common.exists():
+            continue
+        try:
+            data = json.loads(common.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("kicad_common_json_parse_failed", path=str(common), error=str(exc))
+            continue
+        if not isinstance(data, dict):
+            continue
+        env = cast(dict[str, Any], data).get("environment", {})
+        if not isinstance(env, dict):
+            continue
+        vars_section = cast(dict[str, Any], env).get("vars", {})
+        if not isinstance(vars_section, dict):
+            continue
+        return {str(k): str(v) for k, v in cast(dict[str, Any], vars_section).items()}
+    return {}
+
+
+def find_recent_projects(limit: int = 10) -> list[Path]:
+    """Find recently opened KiCad projects on this system."""
     project_files: list[Path] = []
-    for config_dir in config_dirs:
+    for config_dir in _kicad_config_dirs():
         common = config_dir / "kicad_common.json"
         if not common.exists():
             continue
