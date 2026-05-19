@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import sexpdata as _sexpdata_module  # type: ignore[import-untyped]  # pyright: ignore[reportMissingImports]
 
@@ -50,7 +50,7 @@ def load_sym_lib(path: Path) -> list[Any]:
             f"{path} does not look like a kicad_symbol_lib — first element "
             f"is {parsed[0] if isinstance(parsed, list) and parsed else parsed!r}"
         )
-    return cast(list[Any], parsed)
+    return parsed
 
 
 def dump_sym_lib(tree: list[Any]) -> str:

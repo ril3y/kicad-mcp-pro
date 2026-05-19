@@ -99,6 +99,56 @@ def _read_symbol_file(library: str) -> str | None:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+def _expand_kicad_lib_uri_envvars(uri: str, project_dir: Path) -> str:
+    """Expand ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` / OS env / KiCad
+    config env vars inside a sym-lib-table URI string."""
+    import os
+
+    uri = uri.replace("${KIPRJMOD}", str(project_dir))
+    uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
+    try:
+        from .. import discovery as _discovery
+
+        loader_callable = cast(
+            Callable[[], dict[str, str]] | None,
+            getattr(_discovery, "find_kicad_user_env_vars", None),
+        )
+        if loader_callable is not None:
+            for key, value in loader_callable().items():
+                uri = uri.replace("${" + key + "}", value)
+    except (ImportError, AttributeError):
+        pass
+    return uri
+
+
+def _lookup_in_project_sym_lib_table(library: str, project_dir: Path) -> Path | None:
+    """Look up ``library`` by name in the project-local ``sym-lib-table``
+    and return its (env-var-expanded) URI path if the file exists."""
+    sym_lib_table = project_dir / "sym-lib-table"
+    if not sym_lib_table.exists():
+        return None
+    try:
+        table_text = sym_lib_table.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    entry_pattern = re.compile(
+        r'\(lib\s+\(name\s+"?'
+        + re.escape(library)
+        + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"',
+        re.IGNORECASE,
+    )
+    match = entry_pattern.search(table_text)
+    if match is None:
+        return None
+    uri = _expand_kicad_lib_uri_envvars(match.group(1), project_dir)
+    candidate = Path(uri)
+    return candidate if candidate.exists() else None
+
+
 def _resolve_symbol_library_path(library: str, library_path: str) -> Path:
     """Locate the ``.kicad_sym`` file for an editing operation.
 
@@ -125,53 +175,12 @@ def _resolve_symbol_library_path(library: str, library_path: str) -> Path:
     if not library:
         raise ValueError("Either library name or library_path must be supplied.")
 
-    # Try project-local sym-lib-table first (with env-var expansion).
     cfg = get_config()
     if cfg.project_dir is not None:
-        sym_lib_table = cfg.project_dir / "sym-lib-table"
-        if sym_lib_table.exists():
-            try:
-                table_text = sym_lib_table.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                table_text = ""
-            entry_pattern = re.compile(
-                r'\(lib\s+\(name\s+"?'
-                + re.escape(library)
-                + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"',
-                re.IGNORECASE,
-            )
-            match = entry_pattern.search(table_text)
-            if match:
-                uri = match.group(1)
-                # Expand KiCad variables that this project may set.
-                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
-                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
-                # OS env then KiCad config env (matches the convention
-                # used elsewhere in this fork for fp-lib-table).
-                for key, value in os.environ.items():
-                    token = "${" + key + "}"
-                    if token in uri:
-                        uri = uri.replace(token, value)
-                # Try kicad_common.json env vars if loader is available.
-                # The helper lands on main via PR #20; before that lands
-                # we degrade gracefully to OS-env-only.
-                try:
-                    from .. import discovery as _discovery
+        from_project = _lookup_in_project_sym_lib_table(library, cfg.project_dir)
+        if from_project is not None:
+            return from_project
 
-                    loader_callable = cast(
-                        Callable[[], dict[str, str]] | None,
-                        getattr(_discovery, "find_kicad_user_env_vars", None),
-                    )
-                    if loader_callable is not None:
-                        for key, value in loader_callable().items():
-                            uri = uri.replace("${" + key + "}", value)
-                except (ImportError, AttributeError):
-                    pass
-                candidate = Path(uri)
-                if candidate.exists():
-                    return candidate
-
-    # Fall back to the global KiCad symbol library directory.
     fallback = _symbol_library_dir() / f"{library}.kicad_sym"
     if fallback.exists():
         return fallback
