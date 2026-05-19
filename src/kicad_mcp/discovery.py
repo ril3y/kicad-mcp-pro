@@ -317,11 +317,15 @@ def find_kicad_user_env_vars() -> dict[str, str]:
         except (OSError, json.JSONDecodeError) as exc:
             logger.debug("kicad_common_json_parse_failed", path=str(common), error=str(exc))
             continue
-        env = data.get("environment", {})
-        if isinstance(env, dict):
-            vars_section = env.get("vars", {})
-            if isinstance(vars_section, dict):
-                return {str(k): str(v) for k, v in vars_section.items()}
+        if not isinstance(data, dict):
+            continue
+        env = cast(dict[str, Any], data).get("environment", {})
+        if not isinstance(env, dict):
+            continue
+        vars_section = cast(dict[str, Any], env).get("vars", {})
+        if not isinstance(vars_section, dict):
+            continue
+        return {str(k): str(v) for k, v in cast(dict[str, Any], vars_section).items()}
     return {}
 
 
