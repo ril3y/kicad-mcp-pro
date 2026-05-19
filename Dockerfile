@@ -19,6 +19,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
 WORKDIR /app
 
+# Pull patched Debian packages on every image build so Trivy doesn't
+# fail on CVEs that the base image hasn't been rebuilt to pick up yet
+# (e.g. libcap2 / libsystemd0 fixes in deb13u1).
+RUN apt-get update \
+  && apt-get upgrade -y --no-install-recommends \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system kicadmcp \
   && useradd --system --gid kicadmcp --home-dir /app --shell /usr/sbin/nologin kicadmcp
 
