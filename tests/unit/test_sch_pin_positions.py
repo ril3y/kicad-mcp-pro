@@ -431,6 +431,74 @@ def test_symbol_file_picks_correct_entry_among_multiple_libraries(
     assert resolved == target
 
 
+def test_symbol_file_resolves_directory_style_uri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sym-lib-table entry whose URI points at a directory (rather than
+    a single ``.kicad_sym`` file) must fall through to
+    ``<uri>/<library>.kicad_sym``. Documented as "compatibility with
+    directory-style entries" — pinned here so the second branch of
+    ``_symbol_file`` doesn't bit-rot.
+    """
+    from kicad_mcp.tools.schematic import _symbol_file
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    lib_dir = project_dir / "lib_dir"
+    lib_dir.mkdir()
+    sym_file = lib_dir / "easyeda2kicad.kicad_sym"
+    sym_file.write_text(_FAKE_KICAD_SYM, encoding="utf-8")
+    (project_dir / "sym-lib-table").write_text(
+        "(sym_lib_table\n  (version 7)\n"
+        '  (lib (name "easyeda2kicad") (type "KiCad") '
+        '(uri "${KIPRJMOD}/lib_dir") (options "") (descr ""))\n)\n',
+        encoding="utf-8",
+    )
+    _patch_config(monkeypatch, project_dir=project_dir, symbol_library_dir=None)
+
+    assert _symbol_file("easyeda2kicad") == sym_file
+
+
+def test_load_embedded_lib_symbols_handles_schematic_without_lib_symbols(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A schematic file with no ``(lib_symbols ...)`` block (or no
+    ``sch_file`` configured at all) must return an empty list rather
+    than raise. Defends the fallback path against
+    ``get_pin_positions("Nonexistent", ...)`` blowing up before it can
+    return ``{}`` to the tool wrapper.
+    """
+    from kicad_mcp.tools.schematic import _load_embedded_lib_symbol_blocks
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    sch_file = project_dir / "junction.kicad_sch"
+    # Schematic exists but lacks a lib_symbols block.
+    sch_file.write_text(
+        "(kicad_sch (version 20230121) (generator eeschema))\n",
+        encoding="utf-8",
+    )
+    _patch_config(
+        monkeypatch,
+        project_dir=project_dir,
+        symbol_library_dir=None,
+        sch_file=sch_file,
+    )
+
+    assert _load_embedded_lib_symbol_blocks("easyeda", "G2R-2-DC12V") == []
+
+    # No sch_file configured at all -> also returns [].
+    _patch_config(
+        monkeypatch,
+        project_dir=project_dir,
+        symbol_library_dir=None,
+        sch_file=None,
+    )
+    assert _load_embedded_lib_symbol_blocks("easyeda", "G2R-2-DC12V") == []
+
+
 def test_symbol_file_case_insensitive_library_name_match(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
