@@ -271,6 +271,11 @@ def test_apply_mode_writes_pad_net_rewrites_to_existing_footprints(
         '\t\t\t(node (ref "J1") (pin "2")))))\n'
     )
 
+    def _ensure_subdir(base: Path, subdir: str | None) -> Path:
+        target = base / subdir if subdir else base
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
     fake_cfg = SimpleNamespace(
         sch_file=sch_file,
         pcb_file=pcb_file,
@@ -279,19 +284,8 @@ def test_apply_mode_writes_pad_net_rewrites_to_existing_footprints(
         kicad_cli=Path("kicad-cli-stub"),
         cli_timeout=30,
         footprint_library_dir=None,
-        ensure_output_dir=lambda subdir=None: (
-            (output_dir / subdir if subdir else output_dir).resolve()
-            if False
-            else _ensure_subdir(output_dir, subdir)
-        ),
+        ensure_output_dir=lambda subdir=None: _ensure_subdir(output_dir, subdir),
     )
-
-    def _ensure_subdir(base: Path, subdir: str | None) -> Path:
-        target = base / subdir if subdir else base
-        target.mkdir(parents=True, exist_ok=True)
-        return target
-
-    fake_cfg.ensure_output_dir = lambda subdir=None: _ensure_subdir(output_dir, subdir)
 
     # Stub out the kicad-cli invocation: write the synthetic netlist where
     # the tool expects it, return success.
