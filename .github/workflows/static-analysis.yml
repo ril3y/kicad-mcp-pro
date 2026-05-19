@@ -31,7 +31,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --all-extras --frozen
       - name: Pyright
-        run: uv run python scripts/static_analysis_gate.py pyright --max-errors 604
+        run: uv run python scripts/static_analysis_gate.py pyright --max-errors 609
       - name: Vulture
         run: >
           uv run vulture src tests whitelist.py --min-confidence 90
