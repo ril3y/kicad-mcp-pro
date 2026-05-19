@@ -913,9 +913,12 @@ def register(mcp: FastMCP) -> None:
 
         out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(sexpr, encoding="utf-8")
-        return f"Footprint saved to {out_file}\n" f"Package: {package}, Density: {density}" + (
-            f", {pin_count} pins" if pin_count else ""
-        ) + (f", {pitch_mm:.2f}mm pitch" if pitch_mm else "")
+        return (
+            f"Footprint saved to {out_file}\n"
+            f"Package: {package}, Density: {density}"
+            + (f", {pin_count} pins" if pin_count else "")
+            + (f", {pitch_mm:.2f}mm pitch" if pitch_mm else "")
+        )
 
     @mcp.tool()
     @headless_compatible
