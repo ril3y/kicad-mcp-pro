@@ -3,10 +3,10 @@
 <!-- mcp-name: io.github.oaslananka-lab/kicad-mcp-pro -->
 
 [![PyPI](https://img.shields.io/pypi/v/kicad-mcp-pro.svg)](https://pypi.org/project/kicad-mcp-pro/)
-[![CI](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/ci.yml)
-[![Docs](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/docs.yml/badge.svg)](https://github.com/oaslananka/kicad-mcp-pro/actions/workflows/docs.yml)
-[![Codecov](https://codecov.io/gh/oaslananka/kicad-mcp-pro/branch/main/graph/badge.svg)](https://codecov.io/gh/oaslananka/kicad-mcp-pro)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/oaslananka/kicad-mcp-pro/badge)](https://scorecard.dev/viewer/?uri=github.com/oaslananka/kicad-mcp-pro)
+[![CI](https://github.com/ril3y/kicad-mcp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/ril3y/kicad-mcp-pro/actions/workflows/ci.yml)
+[![Docs](https://github.com/ril3y/kicad-mcp-pro/actions/workflows/docs.yml/badge.svg)](https://github.com/ril3y/kicad-mcp-pro/actions/workflows/docs.yml)
+[![Codecov](https://codecov.io/gh/ril3y/kicad-mcp-pro/branch/main/graph/badge.svg)](https://codecov.io/gh/ril3y/kicad-mcp-pro)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ril3y/kicad-mcp-pro/badge)](https://scorecard.dev/viewer/?uri=github.com/ril3y/kicad-mcp-pro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![KiCad 10](https://img.shields.io/badge/KiCad-10-success.svg)](https://www.kicad.org)
@@ -16,9 +16,7 @@ KiCad MCP Pro is a Model Context Protocol server for KiCad PCB and schematic wor
 
 Use it with Claude Desktop, Claude Code, Cursor, VS Code, Codex, or any MCP-compatible client.
 
-Canonical repository: https://github.com/oaslananka/kicad-mcp-pro
-
-Personal showcase mirror: https://github.com/oaslananka/kicad-mcp-pro
+Fork of `oaslananka/kicad-mcp-pro`.
 
 ## Quick Start
 
