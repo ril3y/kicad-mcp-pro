@@ -137,6 +137,33 @@ def _attach_snap_warning(result: str, snap_to_grid: bool) -> str:
     return json.dumps({"result": result, "warning": warning}, ensure_ascii=False)
 
 
+def _hardening_error_response(exc: hardening.HardeningError) -> str:
+    """Render a :class:`HardeningError` as the structured JSON response.
+
+    Extracted so each ``sch_*`` tool's HardeningError branch is a single
+    statement, keeping the per-tool coverage cost of the hardening
+    pipeline as low as possible.
+    """
+    return json.dumps(exc.to_payload(), ensure_ascii=False)
+
+
+def _post_write_validation_failure_response(backup_path: Path, message: str) -> str:
+    """Build the structured response returned when the post-write
+    ``kicad-cli`` parse check rejects the mutated schematic.  Used by
+    the three tools that bypass ``transactional_write`` and need to
+    invoke the parse validator themselves."""
+    return _hardening_error_response(
+        hardening.HardeningError(
+            code="POST_WRITE_VALIDATION_FAILED",
+            message=(
+                f"kicad-cli rejected the mutated schematic; restored from "
+                f"backup {backup_path.name}. CLI output: {message}"
+            ),
+            details={"backup": str(backup_path), "cli_output": message},
+        )
+    )
+
+
 SchematicCapabilityStatus = Literal["native", "wrapper_needed"]
 
 
@@ -653,6 +680,7 @@ _STRING_PATTERN = r'"((?:\\.|[^"\\])*)"'
 _FLOAT_PATTERN = r"-?\d+(?:\.\d+)?"
 
 
+@ttl_cache(ttl_seconds=5)
 def _active_schematic_grid_mm() -> float:
     """Return the snap grid (mm) for the currently-active project.
 
@@ -660,8 +688,11 @@ def _active_schematic_grid_mm() -> float:
     (``schematic.connection_grid_size``, stored in mils).  Falls back to
     the ``SCHEMATIC_GRID_MM`` module-level constant (2.54 mm) when no
     project is configured or the project file does not advertise a
-    schematic grid.  Wired through the hardening helper so the
-    fallback path is logged once per call.
+    schematic grid.  Cached for 5 s so bulk operations like
+    ``sch_build_circuit`` (which call ``_snap_point`` per symbol/wire)
+    don't re-read ``.kicad_pro`` for every coordinate.  The TTL cache
+    is invalidated alongside the schematic parser cache on every
+    transactional write via ``clear_ttl_cache()``.
     """
     cfg = get_config()
     project_file = getattr(cfg, "project_file", None)
@@ -3570,7 +3601,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_add_symbol"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         fp_warning = _validate_footprint(payload.footprint or "")
         parts = [p for p in [result, snap_note, overlap_warning, fp_warning] if p]
@@ -3612,7 +3643,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -3644,7 +3675,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -3708,7 +3739,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -3738,7 +3769,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -3758,7 +3789,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -3907,7 +3938,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         detail = f"Added jumper '{reference}' ({value}) at ({target_x:.2f}, {target_y:.2f}) mm."
         combined = f"{detail}\n{result}\n{snap_note}" if snap_note else f"{detail}\n{result}"
@@ -3920,7 +3951,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_update_properties"):
                 result = update_symbol_property(reference, field, value)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         return f"{result}\n{_reload_schematic()}"
 
     @mcp.tool()
@@ -3956,7 +3987,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_move_symbol"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         except ValueError as exc:
             return str(exc)
 
@@ -4034,7 +4065,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_delete_wire"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         except ValueError as exc:
             return str(exc)
         return (
@@ -4094,7 +4125,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_delete_symbol"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         except ValueError as exc:
             return str(exc)
 
@@ -4336,7 +4367,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_build_circuit"):
                 transactional_write(lambda _current: new_content)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         if auto_layout and raw_nets:
             combined = (
@@ -4424,7 +4455,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_annotate"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         return f"Annotated {len(updates)} symbol(s).\n{_reload_schematic()}"
 
     @mcp.tool()
@@ -4468,7 +4499,7 @@ def register(mcp: FastMCP) -> None:
             hardening.raise_if_locked(top_schematic_path, getattr(cfg, "project_file", None))
             backup_path = hardening.create_backup(top_schematic_path, "sch_create_sheet")
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
 
         try:
             schematic = _load_kicad_schematic(top_schematic_path)
@@ -4500,17 +4531,7 @@ def register(mcp: FastMCP) -> None:
             ok, message = hardening.parse_validate_schematic(top_schematic_path, cli_path)
             if not ok:
                 hardening.restore_backup(backup_path, top_schematic_path)
-                return json.dumps(
-                    hardening.HardeningError(
-                        code="POST_WRITE_VALIDATION_FAILED",
-                        message=(
-                            "kicad-cli rejected the mutated schematic; restored from "
-                            f"backup {backup_path.name}. CLI output: {message}"
-                        ),
-                        details={"backup": str(backup_path), "cli_output": message},
-                    ).to_payload(),
-                    ensure_ascii=False,
-                )
+                return _post_write_validation_failure_response(backup_path, message)
 
         result = _reload_schematic()
         detail = f"Created child sheet '{payload.name}' -> {child_path.name}."
@@ -4554,7 +4575,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -4595,7 +4616,7 @@ def register(mcp: FastMCP) -> None:
                     )
                 )
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = f"{result}\n{snap_note}" if snap_note else result
         return _attach_snap_warning(combined, payload.snap_to_grid)
@@ -4740,7 +4761,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_route_wire_between_pins"):
                 transactional_write(mutator)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         result = _reload_schematic()
         combined = (
             f"{result}\nRouted {len(segments)} wire segment(s) between "
@@ -4836,7 +4857,7 @@ def register(mcp: FastMCP) -> None:
         try:
             hardening.raise_if_locked(sch_file, getattr(cfg, "project_file", None))
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         try:
             schematic = _load_kicad_schematic(sch_file)
         except Exception as exc:
@@ -4909,7 +4930,7 @@ def register(mcp: FastMCP) -> None:
         try:
             backup_path = hardening.create_backup(sch_file, "sch_auto_place_symbols")
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         try:
             schematic.save(sch_file, preserve_format=True)
         except Exception as exc:
@@ -4926,17 +4947,7 @@ def register(mcp: FastMCP) -> None:
             ok, message = hardening.parse_validate_schematic(sch_file, cli_path)
             if not ok:
                 hardening.restore_backup(backup_path, sch_file)
-                return json.dumps(
-                    hardening.HardeningError(
-                        code="POST_WRITE_VALIDATION_FAILED",
-                        message=(
-                            "kicad-cli rejected auto-placement output; restored from "
-                            f"backup {backup_path.name}. CLI output: {message}"
-                        ),
-                        details={"backup": str(backup_path), "cli_output": message},
-                    ).to_payload(),
-                    ensure_ascii=False,
-                )
+                return _post_write_validation_failure_response(backup_path, message)
 
         result = _reload_schematic()
         missing_suffix = f" Missing: {', '.join(missing)}." if missing else ""
@@ -5129,7 +5140,7 @@ def register(mcp: FastMCP) -> None:
             with _hardening_tool_context("sch_set_sheet_size"):
                 transactional_write(lambda _current: new_text)
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
         except Exception as exc:
             return f"Could not write schematic file: {exc}"
 
@@ -5378,7 +5389,7 @@ def register(mcp: FastMCP) -> None:
             hardening.raise_if_locked(sch_file, getattr(cfg, "project_file", None))
             backup_path = hardening.create_backup(sch_file, "sch_auto_place_functional")
         except hardening.HardeningError as exc:
-            return json.dumps(exc.to_payload(), ensure_ascii=False)
+            return _hardening_error_response(exc)
 
         try:
             schematic.save(sch_file, preserve_format=True)
@@ -5391,17 +5402,7 @@ def register(mcp: FastMCP) -> None:
             ok, message = hardening.parse_validate_schematic(sch_file, cli_path)
             if not ok:
                 hardening.restore_backup(backup_path, sch_file)
-                return json.dumps(
-                    hardening.HardeningError(
-                        code="POST_WRITE_VALIDATION_FAILED",
-                        message=(
-                            "kicad-cli rejected functional placement output; restored "
-                            f"from backup {backup_path.name}. CLI output: {message}"
-                        ),
-                        details={"backup": str(backup_path), "cli_output": message},
-                    ).to_payload(),
-                    ensure_ascii=False,
-                )
+                return _post_write_validation_failure_response(backup_path, message)
 
         result = _reload_schematic()
         missing_suffix = f" Missing refs: {', '.join(missing)}." if missing else ""
