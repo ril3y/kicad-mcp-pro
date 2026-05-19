@@ -2085,18 +2085,8 @@ def _run_kicad_cli_netlist_export(sch_path: Path, out_path: Path) -> tuple[int, 
     return 1, last_msg
 
 
-def _parse_kicadsexpr_netlist(
-    text: str,
-) -> tuple[dict[str, dict[str, str]], dict[str, list[tuple[str, str]]]]:
-    """Parse a ``kicadsexpr``-format netlist into components + nets.
-
-    Returns ``(components_by_ref, nets_by_name)`` where:
-      - ``components_by_ref[ref]`` → ``{"value": ..., "footprint": ...}``
-      - ``nets_by_name[net]`` → ``[(ref, pin), ...]``
-
-    Robust against both single-line and multi-line node serializations
-    (KiCad 10's kicad-cli emits multi-line — `(node\\n\\t(ref ...)`).
-    """
+def _parse_netlist_components(text: str) -> dict[str, dict[str, str]]:
+    """Parse the ``(comp ...)`` entries of a kicadsexpr netlist."""
     components: dict[str, dict[str, str]] = {}
     for m in re.finditer(r"\(comp\s", text):
         block, _ = _extract_block(text, m.start())
@@ -2110,22 +2100,41 @@ def _parse_kicadsexpr_netlist(
             "value": value_m.group(1) if value_m else "",
             "footprint": fp_m.group(1) if fp_m else "",
         }
+    return components
 
+
+def _parse_netlist_net_nodes(block: str) -> list[tuple[str, str]]:
+    """Parse the ``(node ...)`` children of a single netlist ``(net ...)`` block."""
+    nodes: list[tuple[str, str]] = []
+    for nm in re.finditer(r"\(node\s", block):
+        node_block, _ = _extract_block(block, nm.start())
+        ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", node_block)
+        pin_m = re.search(rf"\(pin\s+{STRING_PATTERN}\)", node_block)
+        if ref_m and pin_m and ref_m.group(1) and pin_m.group(1):
+            nodes.append((ref_m.group(1), pin_m.group(1)))
+    return nodes
+
+
+def _parse_kicadsexpr_netlist(
+    text: str,
+) -> tuple[dict[str, dict[str, str]], dict[str, list[tuple[str, str]]]]:
+    """Parse a ``kicadsexpr``-format netlist into components + nets.
+
+    Returns ``(components_by_ref, nets_by_name)`` where:
+      - ``components_by_ref[ref]`` → ``{"value": ..., "footprint": ...}``
+      - ``nets_by_name[net]`` → ``[(ref, pin), ...]``
+
+    Robust against both single-line and multi-line node serializations
+    (KiCad 10's kicad-cli emits multi-line — `(node\\n\\t(ref ...)`).
+    """
+    components = _parse_netlist_components(text)
     nets: dict[str, list[tuple[str, str]]] = {}
     for m in re.finditer(r"\(net\s+\(code\s", text):
         block, _ = _extract_block(text, m.start())
         name_m = re.search(rf"\(name\s+{STRING_PATTERN}\)", block)
         if not name_m:
             continue
-        name = name_m.group(1)
-        nodes: list[tuple[str, str]] = []
-        for nm in re.finditer(r"\(node\s", block):
-            node_block, _ = _extract_block(block, nm.start())
-            ref_m = re.search(rf"\(ref\s+{STRING_PATTERN}\)", node_block)
-            pin_m = re.search(rf"\(pin\s+{STRING_PATTERN}\)", node_block)
-            if ref_m and pin_m and ref_m.group(1) and pin_m.group(1):
-                nodes.append((ref_m.group(1), pin_m.group(1)))
-        nets[name] = nodes
+        nets[name_m.group(1)] = _parse_netlist_net_nodes(block)
     return components, nets
 
 
