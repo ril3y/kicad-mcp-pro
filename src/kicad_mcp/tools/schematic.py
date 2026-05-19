@@ -1720,6 +1720,61 @@ def run_auto_add_missing_junctions() -> str:
     return f"Inserted {inserted} missing junction(s)."
 
 
+def _expand_kicad_sym_uri(uri: str, project_dir: Path | None) -> str:
+    """Expand KiCad-style ``${VAR}`` placeholders in a ``sym-lib-table`` URI.
+
+    Mirrors ``tools/pcb._expand_kicad_lib_uri`` so the symbol side honors the
+    same precedence the GUI uses (see ``kicad/include/env_paths.h``):
+      1. ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> ``project_dir``.
+      2. Process environment (``os.environ``) — lets a CI runner override
+         user-defined vars without editing config files.
+      3. User-defined vars from ``kicad_common.json::environment.vars``
+         (KiCad ``Preferences > Configure Paths``). These are the normal
+         source for things like ``${EASYEDA2KICAD}`` / ``${MY_LIBS}``;
+         KiCad only injects them when the GUI is running, so the MCP
+         server reads them out of the config file directly.
+
+    Unknown placeholders are left intact so the caller's ``exists()`` probe
+    fails loudly rather than dispatching to a partially-substituted path.
+    """
+    import os
+
+    from ..discovery import find_kicad_user_env_vars
+
+    if project_dir is not None:
+        uri = uri.replace("${KIPRJMOD}", str(project_dir))
+        uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
+    for key, value in find_kicad_user_env_vars().items():
+        uri = uri.replace("${" + key + "}", value)
+    return uri
+
+
+def _lookup_sym_lib_table_uri(library: str, project_dir: Path) -> str | None:
+    """Return the raw ``uri`` field for ``library`` in the project-local
+    ``sym-lib-table``, or ``None`` if no matching entry exists. The URI is
+    returned un-expanded so callers can decide whether to substitute
+    project / OS / KiCad user env vars."""
+    sym_table = project_dir / "sym-lib-table"
+    if not sym_table.exists():
+        return None
+    try:
+        table_text = sym_table.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    entry_pattern = re.compile(
+        r'\(name\s+"?'
+        + re.escape(library)
+        + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
+        re.IGNORECASE,
+    )
+    match = entry_pattern.search(table_text)
+    return match.group(1) if match else None
+
+
 def _symbol_file(library: str) -> Path:
     """Resolve a symbol library name to a ``.kicad_sym`` path.
 
@@ -1728,44 +1783,106 @@ def _symbol_file(library: str) -> Path:
     libraries) resolve in headless flows that don't go through eeschema's
     GUI library resolver. The schematic-side counterpart of PR #9's
     ``_footprint_file`` fix in ``tools/pcb.py`` — same S-expression
-    format, same ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` substitution,
-    same fall-through-to-global semantics. Without this fix, an attempt
-    to spawn eeschema headlessly on a project that uses easyeda2kicad-
-    imported symbols would either crash on the missing library or block
-    on the GUI's "library not found" modal.
+    format, same fall-through-to-global semantics.
+
+    URI expansion now matches the PCB side: ``${KIPRJMOD}`` /
+    ``${KICAD_PROJECT_DIR}`` resolve to ``project_dir``, then OS env, then
+    user-defined vars from ``kicad_common.json::environment.vars`` so
+    URIs like ``${EASYEDA2KICAD}/easyeda2kicad.kicad_sym`` resolve
+    headlessly. Without this, ``sch_get_pin_positions`` /
+    ``sch_add_symbol`` fail on projects that use easyeda2kicad-imported
+    libraries even though the GUI resolves them fine.
     """
     cfg = get_config()
     if cfg.project_dir is not None:
-        sym_table = cfg.project_dir / "sym-lib-table"
-        if sym_table.exists():
-            try:
-                table_text = sym_table.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                table_text = ""
-            entry_pattern = re.compile(
-                r'\(name\s+"?'
-                + re.escape(library)
-                + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
-                re.IGNORECASE,
-            )
-            match = entry_pattern.search(table_text)
-            if match:
-                uri = match.group(1)
-                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
-                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
-                # ``sym-lib-table`` URIs are usually full paths to a
-                # ``.kicad_sym`` file (not directories like fp-lib-table).
-                # Try the URI itself first, then fall back to URI/library.kicad_sym
-                # for compatibility with directory-style entries.
-                candidate = Path(uri)
-                if candidate.exists() and candidate.suffix == ".kicad_sym":
-                    return candidate
-                candidate = candidate / f"{library}.kicad_sym"
-                if candidate.exists():
-                    return candidate
+        raw_uri = _lookup_sym_lib_table_uri(library, cfg.project_dir)
+        if raw_uri is not None:
+            uri = _expand_kicad_sym_uri(raw_uri, cfg.project_dir)
+            # ``sym-lib-table`` URIs are usually full paths to a
+            # ``.kicad_sym`` file (not directories like fp-lib-table).
+            # Try the URI itself first, then fall back to URI/library.kicad_sym
+            # for compatibility with directory-style entries.
+            candidate = Path(uri)
+            if candidate.exists() and candidate.suffix == ".kicad_sym":
+                return candidate
+            directory_candidate = candidate / f"{library}.kicad_sym"
+            if directory_candidate.exists():
+                return directory_candidate
     if cfg.symbol_library_dir is None or not cfg.symbol_library_dir.exists():
         raise FileNotFoundError("No KiCad symbol library directory is configured.")
     return cfg.symbol_library_dir / f"{library}.kicad_sym"
+
+
+def _load_embedded_lib_symbol_blocks(library: str, symbol_name: str) -> list[str]:
+    """Look for ``library:symbol_name`` inside the active schematic's
+    ``(lib_symbols ...)`` cache and return the matching symbol blocks.
+
+    KiCad embeds a copy of every used symbol inside each schematic's
+    ``lib_symbols`` section, prefixed with ``<library_name>:``. This is the
+    only authoritative source when the project's ``sym-lib-table`` doesn't
+    list the library — common after a project rename or when
+    easyeda2kicad-imported symbols were placed under one library name
+    (``easyeda:``) but the table was later renamed (``easyeda2kicad``).
+    Falling back here lets headless flows resolve pin positions the same
+    way the eeschema GUI does.
+
+    Returns an empty list when no schematic is configured, no matching
+    block is present, or the cache lookup itself raises. Quiet on
+    failure because this is a fallback path; callers handle empty
+    results by surfacing a clean "symbol not found" message.
+    """
+    cfg = get_config()
+    sch_file = cfg.sch_file
+    if sch_file is None or not sch_file.exists():
+        return []
+    try:
+        sch_text = sch_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    lib_symbols_marker = sch_text.find("(lib_symbols")
+    if lib_symbols_marker < 0:
+        return []
+    lib_symbols_block, _ = _extract_block(sch_text, lib_symbols_marker)
+    if not lib_symbols_block:
+        return []
+    embedded_name = f"{library}:{symbol_name}"
+    blocks = _collect_symbol_blocks(lib_symbols_block, embedded_name)
+    if not blocks:
+        return []
+    # The embedded block carries the prefixed name (``easyeda:G2R-2-DC12V``)
+    # which trips up downstream parsers expecting the bare symbol name
+    # (used in ``_extract_child_symbol_blocks`` prefix matching for units).
+    # Rewrite just the outermost header back to the bare form so the same
+    # pin / unit extractors that operate on library-file blocks work here.
+    normalized = list(blocks)
+    normalized[-1] = normalized[-1].replace(
+        f'(symbol "{embedded_name}"',
+        f'(symbol "{symbol_name}"',
+        1,
+    )
+    return normalized
+
+
+def _load_symbol_blocks(library: str, symbol_name: str) -> list[str]:
+    """Load symbol definition blocks for ``library:symbol_name`` from the
+    sym-lib-table-resolved file, falling back to the active schematic's
+    embedded ``lib_symbols`` cache.
+
+    Centralizes the resolution flow used by ``get_pin_positions``,
+    ``get_pin_alias_positions``, ``get_symbol_available_units``, and
+    ``load_lib_symbol`` so they all benefit from the embedded fallback
+    in one place.
+    """
+    try:
+        sym_file = _symbol_file(library)
+    except FileNotFoundError:
+        sym_file = None
+    if sym_file is not None and sym_file.exists():
+        content = sym_file.read_text(encoding="utf-8", errors="ignore")
+        blocks = _collect_symbol_blocks(content, symbol_name)
+        if blocks:
+            return blocks
+    return _load_embedded_lib_symbol_blocks(library, symbol_name)
 
 
 def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
@@ -1777,13 +1894,15 @@ def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
 
 
 def load_lib_symbol(library: str, symbol_name: str) -> str | None:
-    """Load a symbol definition from a KiCad symbol library."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return None
+    """Load a symbol definition from a KiCad symbol library.
 
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    Resolution is delegated to ``_load_symbol_blocks`` which consults the
+    project ``sym-lib-table`` first and then falls back to the active
+    schematic's embedded ``lib_symbols`` cache — important for projects
+    whose schematics reference a library name (``easyeda:``) that no
+    longer exists in the sym-lib-table (``easyeda2kicad``).
+    """
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return None
 
@@ -1992,12 +2111,7 @@ def get_pin_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Calculate absolute pin tip positions for a symbol placement."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return {}
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return {}
     available_units = _available_units_from_blocks(blocks)
@@ -2034,12 +2148,7 @@ def get_pin_alias_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Return a lookup for pin numbers, names, and normalized aliases."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return {}
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return {}
     available_units = _available_units_from_blocks(blocks)
@@ -2079,12 +2188,7 @@ def get_pin_alias_positions(
 
 def get_symbol_available_units(library: str, symbol_name: str) -> set[int]:
     """Return supported symbol units from the KiCad library."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return set()
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return set()
     return _available_units_from_blocks(blocks)
@@ -3691,12 +3795,8 @@ def register(mcp: FastMCP) -> None:
             key=int,
         )
 
-        units = []
-        sym_file = _symbol_file(library)
-        if sym_file.exists():
-            content = sym_file.read_text(encoding="utf-8", errors="ignore")
-            symbol_blocks = _collect_symbol_blocks(content, symbol_name)
-            units = sorted(_available_units_from_blocks(symbol_blocks))
+        symbol_blocks = _load_symbol_blocks(library, symbol_name)
+        units = sorted(_available_units_from_blocks(symbol_blocks)) if symbol_blocks else []
 
         return json.dumps(
             {
