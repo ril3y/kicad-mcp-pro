@@ -611,12 +611,110 @@ def build_wire_proto(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> 
     return line
 
 
+def build_bus_proto(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> Message:
+    """Build a master ``SchematicLine`` proto for a bus."""
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicLine,
+        SchematicLineType,
+    )
+
+    line = SchematicLine()
+    line.start.x_nm = _mm_to_nm(x1_mm)
+    line.start.y_nm = _mm_to_nm(y1_mm)
+    line.end.x_nm = _mm_to_nm(x2_mm)
+    line.end.y_nm = _mm_to_nm(y2_mm)
+    # The master ``SchematicLine`` proto names this field ``type``; the
+    # generated Python getter exposes it as ``line.type`` (the existing
+    # ``build_wire_proto`` writes to ``line.line_type`` which silently
+    # sets a non-existent attribute and leaves the on-wire enum at
+    # SLT_UNKNOWN — a pre-existing bug that's harmless while the IPC path
+    # is off-by-default but should be revisited when the gate stabilises).
+    # We use the correct field name here so the bus dispatch carries the
+    # right line type when an operator opts in.
+    line.type = SchematicLineType.SLT_BUS
+    return line
+
+
+def build_junction_proto(x_mm: float, y_mm: float) -> Message:
+    """Build a master ``Junction`` proto at the given position."""
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import Junction
+
+    junction = Junction()
+    junction.position.x_nm = _mm_to_nm(x_mm)
+    junction.position.y_nm = _mm_to_nm(y_mm)
+    return junction
+
+
+def build_no_connect_proto(x_mm: float, y_mm: float) -> Message:
+    """Build a master ``NoConnectMarker`` proto at the given position."""
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import NoConnectMarker
+
+    marker = NoConnectMarker()
+    marker.position.x_nm = _mm_to_nm(x_mm)
+    marker.position.y_nm = _mm_to_nm(y_mm)
+    return marker
+
+
+#: Mapping from the file-path ``direction`` string used by
+#: ``sch_add_bus_wire_entry`` to the (dx_mm, dy_mm) size vector that the
+#: file-format ``bus_entry`` block emits. Keep these in sync with
+#: ``tools.schematic.bus_entry_block``.
+_BUS_ENTRY_OFFSETS_MM: dict[str, tuple[float, float]] = {
+    "up_right": (2.54, -2.54),
+    "down_right": (2.54, 2.54),
+    "up_left": (-2.54, -2.54),
+    "down_left": (-2.54, 2.54),
+}
+
+
+def build_bus_wire_entry_proto(x_mm: float, y_mm: float, direction: str) -> Message:
+    """Build a master ``BusEntry`` proto carrying the wire-to-bus marker.
+
+    Parameters
+    ----------
+    x_mm, y_mm:
+        Anchor (the bus-side endpoint) of the entry, in millimetres.
+    direction:
+        One of ``up_right``, ``down_right``, ``up_left``, ``down_left`` —
+        the same enumeration the file-path helper accepts. Anything else
+        raises ``ValueError`` so the mismatch is loud rather than silent.
+    """
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        BusEntry,
+        BusEntryType,
+    )
+
+    try:
+        dx_mm, dy_mm = _BUS_ENTRY_OFFSETS_MM[direction]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown bus_entry direction {direction!r}; expected one of "
+            f"{sorted(_BUS_ENTRY_OFFSETS_MM)}."
+        ) from exc
+
+    entry = BusEntry()
+    entry.position.x_nm = _mm_to_nm(x_mm)
+    entry.position.y_nm = _mm_to_nm(y_mm)
+    entry.size.x_nm = _mm_to_nm(dx_mm)
+    entry.size.y_nm = _mm_to_nm(dy_mm)
+    entry.type = BusEntryType.BET_WIRE_TO_BUS
+    return entry
+
+
 __all__ = (
     "SCH_IPC_OPT_IN_ENV",
     "SCH_IPC_PERSISTENCE_HINT",
+    "build_bus_proto",
+    "build_bus_wire_entry_proto",
     "build_global_label_proto",
     "build_hierarchical_label_proto",
+    "build_junction_proto",
     "build_local_label_proto",
+    "build_no_connect_proto",
     "build_wire_proto",
     "reset_runtime_gate_cache",
     "route_schematic_create",

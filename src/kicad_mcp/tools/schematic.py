@@ -22,9 +22,12 @@ from ..config import get_config
 from ..connection import KiCadConnectionError, get_kicad
 from ..discovery import is_numbered_duplicate_kicad_file
 from ..ipc.runtime_gate import (
+    build_bus_proto,
+    build_bus_wire_entry_proto,
     build_global_label_proto,
     build_hierarchical_label_proto,
     build_local_label_proto,
+    build_no_connect_proto,
     build_wire_proto,
     route_schematic_create,
 )
@@ -3423,6 +3426,17 @@ def register(mcp: FastMCP) -> None:
         Coordinates snap to the 2.54 mm schematic grid by default; set
         snap_to_grid=False only when an exact off-grid coordinate is intentional.
         """
+        # TODO(symbol-via-ipc): wire through ``route_schematic_create`` once
+        # the master ``SchematicSymbolInstance`` round-trip is verified.
+        # Symbol placement is non-trivial over IPC: the proto carries a
+        # ``LibraryIdentifier``, a ``SheetPath``, a ``SchematicSymbolTransform``
+        # (orientation + mirror state), and a nested ``SchematicSymbol``
+        # ``definition``. That definition mirrors the s-expression
+        # ``lib_symbols`` block — building it from the upstream library
+        # cache, then attaching reference/value/footprint fields, is a
+        # standalone work item. The same defer applies transitively to
+        # ``sch_add_power_symbol`` (which dispatches through this tool).
+        # Until that lands, the file-based path remains the only route.
         payload = AddSymbolInput(
             library=library,
             symbol_name=symbol_name,
@@ -3620,14 +3634,22 @@ def register(mcp: FastMCP) -> None:
             (payload.x1_mm, payload.y1_mm, payload.x2_mm, payload.y2_mm),
             bus_coords,
         )
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                wire_block(*bus_coords, "bus"),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    wire_block(*bus_coords, "bus"),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        proto = build_bus_proto(*bus_coords)
+        outcome = str(route_schematic_create([proto], _file_path))
+        # The file path injects the snap note itself; the IPC path does
+        # not, so we append it here when it has not already appeared.
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_add_bus_wire_entry(
@@ -3645,14 +3667,25 @@ def register(mcp: FastMCP) -> None:
         )
         entry_x, entry_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (entry_x, entry_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                bus_entry_block(entry_x, entry_y, payload.direction),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    bus_entry_block(entry_x, entry_y, payload.direction),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        # The IPC ``BusEntry`` proto hard-codes BET_WIRE_TO_BUS — the
+        # historical file-path callers all create wire-to-bus markers and
+        # there is no ``bus_to_bus`` ``direction`` in the file-path enum.
+        # The size vector mirrors the file-path offset table so the IPC
+        # marker visually matches the legacy s-expression output.
+        proto = build_bus_wire_entry_proto(entry_x, entry_y, payload.direction)
+        outcome = str(route_schematic_create([proto], _file_path))
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_add_no_connect(x_mm: float, y_mm: float, snap_to_grid: bool = True) -> str:
@@ -3660,14 +3693,20 @@ def register(mcp: FastMCP) -> None:
         payload = AddNoConnectInput(x_mm=x_mm, y_mm=y_mm, snap_to_grid=snap_to_grid)
         marker_x, marker_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (marker_x, marker_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                no_connect_block(marker_x, marker_y),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    no_connect_block(marker_x, marker_y),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        proto = build_no_connect_proto(marker_x, marker_y)
+        outcome = str(route_schematic_create([proto], _file_path))
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     @headless_compatible
@@ -4608,6 +4647,18 @@ def register(mcp: FastMCP) -> None:
     @headless_compatible
     def sch_add_missing_junctions() -> str:
         """Insert missing schematic junctions at T-intersection wire endpoints."""
+        # TODO(junction-via-ipc): the IPC ``Junction`` proto + the
+        # ``build_junction_proto`` helper in
+        # :mod:`kicad_mcp.ipc.runtime_gate` are ready to dispatch a
+        # *single* junction. This tool, by contrast, scans the entire
+        # schematic for T-intersections in the file-text and inserts a
+        # batch of junctions in one shot. Wiring that through IPC would
+        # require either (a) re-implementing T-intersection detection on
+        # top of the IPC ``GetItems`` surface, or (b) keeping detection
+        # on the file side and dispatching the resulting set as a batch
+        # ``route_schematic_create``. Both are out of scope for the
+        # current sch_add_* gating pass; the file path is the only route
+        # for now.
         summary = run_auto_add_missing_junctions()
         result = _reload_schematic()
         return f"{result}\n{summary}"
