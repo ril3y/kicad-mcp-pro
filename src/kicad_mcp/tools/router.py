@@ -107,6 +107,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_add_text",
             "pcb_set_board_outline",
             "pcb_set_design_rules",
+            "pcb_apply_manufacturer_profile",
             "pcb_set_stackup",
             "pcb_add_blind_via",
             "pcb_add_microvia",

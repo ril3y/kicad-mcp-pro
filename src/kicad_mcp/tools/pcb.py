@@ -2233,6 +2233,74 @@ def _format_pcb_netlist_diff_report(
     return "\n".join(lines)
 
 
+def _board_design_rule_definitions(
+    payload: SetDesignRulesInput,
+) -> list[tuple[str, str, list[str]]]:
+    """Build the (name, condition, constraint-lines) tuples for board-level rules.
+
+    Shared by ``pcb_set_design_rules`` and ``pcb_apply_manufacturer_profile`` so
+    both write identical rule blocks. The constraint string formatting is
+    locked to the same _mm() helper used everywhere else in the .kicad_dru
+    pipeline.
+    """
+    from .routing_rules import _mm
+
+    return [
+        (
+            "Board minimum track width",
+            "A.Type == 'track'",
+            [
+                f"  (constraint track_width (min {_mm(payload.min_trace_width_mm)}) "
+                f"(opt {_mm(payload.min_trace_width_mm)}))",
+            ],
+        ),
+        (
+            "Board minimum clearance",
+            (
+                "A.Type == 'track' || A.Type == 'via' || A.Type == 'pad' || "
+                "B.Type == 'track' || B.Type == 'via' || B.Type == 'pad'"
+            ),
+            [
+                f"  (constraint clearance (min {_mm(payload.min_clearance_mm)}))",
+                f"  (constraint hole_to_hole (min {_mm(payload.min_hole_to_hole_mm)}))",
+            ],
+        ),
+        (
+            "Board minimum via geometry",
+            "A.Type == 'via' || A.Type == 'micro_via' || A.Type == 'buried_via'",
+            [
+                f"  (constraint via_diameter (min {_mm(payload.min_via_diameter_mm)}))",
+                f"  (constraint hole_size (min {_mm(payload.min_via_drill_mm)}))",
+                f"  (constraint annular_width (min {_mm(payload.min_annular_ring_mm)}))",
+            ],
+        ),
+    ]
+
+
+def _apply_board_design_rules(payload: SetDesignRulesInput) -> Path:
+    """Apply ``payload`` to the active .kicad_dru file and return its path.
+
+    Raises ``OSError`` or ``ValueError`` on failure (caller surfaces as a
+    non-success MCP response).
+    """
+    from .routing_rules import _load_rules_content, _rules_file_path, _upsert_rule
+
+    path = _rules_file_path()
+    content = _load_rules_content(path)
+    for rule_name, condition, constraints in _board_design_rule_definitions(payload):
+        rule_body = "\n".join(
+            [
+                f"(rule {_sexpr_string(rule_name)}",
+                f'  (condition "{condition}")',
+                *constraints,
+                ")",
+            ]
+        )
+        content = _upsert_rule(content, rule_name, rule_body)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def register(mcp: FastMCP) -> None:
     """Register PCB tools."""
 
@@ -2790,8 +2858,6 @@ def register(mcp: FastMCP) -> None:
         min_hole_to_hole_mm: float = 0.25,
     ) -> str:
         """Write board-level manufacturing constraints into the active .kicad_dru file."""
-        from .routing_rules import _load_rules_content, _mm, _rules_file_path, _upsert_rule
-
         payload = SetDesignRulesInput(
             min_trace_width_mm=min_trace_width_mm,
             min_clearance_mm=min_clearance_mm,
@@ -2800,52 +2866,8 @@ def register(mcp: FastMCP) -> None:
             min_annular_ring_mm=min_annular_ring_mm,
             min_hole_to_hole_mm=min_hole_to_hole_mm,
         )
-
-        rule_definitions = [
-            (
-                "Board minimum track width",
-                "A.Type == 'track'",
-                [
-                    f"  (constraint track_width (min {_mm(payload.min_trace_width_mm)}) "
-                    f"(opt {_mm(payload.min_trace_width_mm)}))",
-                ],
-            ),
-            (
-                "Board minimum clearance",
-                (
-                    "A.Type == 'track' || A.Type == 'via' || A.Type == 'pad' || "
-                    "B.Type == 'track' || B.Type == 'via' || B.Type == 'pad'"
-                ),
-                [
-                    f"  (constraint clearance (min {_mm(payload.min_clearance_mm)}))",
-                    f"  (constraint hole_to_hole (min {_mm(payload.min_hole_to_hole_mm)}))",
-                ],
-            ),
-            (
-                "Board minimum via geometry",
-                "A.Type == 'via' || A.Type == 'micro_via' || A.Type == 'buried_via'",
-                [
-                    f"  (constraint via_diameter (min {_mm(payload.min_via_diameter_mm)}))",
-                    f"  (constraint hole_size (min {_mm(payload.min_via_drill_mm)}))",
-                    f"  (constraint annular_width (min {_mm(payload.min_annular_ring_mm)}))",
-                ],
-            ),
-        ]
-
         try:
-            path = _rules_file_path()
-            content = _load_rules_content(path)
-            for rule_name, condition, constraints in rule_definitions:
-                rule_body = "\n".join(
-                    [
-                        f"(rule {_sexpr_string(rule_name)}",
-                        f'  (condition "{condition}")',
-                        *constraints,
-                        ")",
-                    ]
-                )
-                content = _upsert_rule(content, rule_name, rule_body)
-            path.write_text(content, encoding="utf-8")
+            path = _apply_board_design_rules(payload)
         except (OSError, ValueError) as exc:
             return f"Board design rule update failed: {exc}"
 
@@ -2858,6 +2880,208 @@ def register(mcp: FastMCP) -> None:
             f"- Min annular ring: {payload.min_annular_ring_mm:.3f} mm\n"
             f"- Min hole-to-hole: {payload.min_hole_to_hole_mm:.3f} mm"
         )
+
+    @mcp.tool()
+    @headless_compatible
+    def pcb_apply_manufacturer_profile(
+        manufacturer: str,
+        tier: str = "standard",
+        apply_drc: bool = True,
+        apply_net_classes: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Apply a manufacturer's DRC floor and recommended net classes in one shot.
+
+        Resolves ``<manufacturer>_<tier>.json`` from the bundled DFM profiles
+        (case-insensitive) and writes the appropriate rules into the active
+        ``.kicad_dru`` file. Distinct from ``dfm_load_manufacturer_profile``,
+        which only selects the active profile for compliance CHECKING — this
+        tool actually SETS the rules. When ``dry_run`` is true, no file is
+        touched.
+        """
+        from importlib import resources
+
+        from ..models.pcb import SetDesignRulesInput as _SetDesignRulesInput
+
+        # _net_class_rule_body / _mm / _rules_file_path / _write_rule are
+        # intentionally re-used cross-module to avoid duplicating .kicad_dru
+        # write logic. Both sibling modules live under kicad_mcp.tools so the
+        # private-usage warning is a false positive for this in-package call.
+        from .routing import _net_class_rule_body  # pyright: ignore[reportPrivateUsage]
+        from .routing_rules import (
+            _mm,  # pyright: ignore[reportPrivateUsage]
+            _rules_file_path,  # pyright: ignore[reportPrivateUsage]
+            _write_rule,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        # --- 1. Resolve profile ------------------------------------------------
+        manufacturer_key = manufacturer.strip().lower()
+        tier_key = tier.strip().lower()
+        if not manufacturer_key:
+            raise ValueError("manufacturer must be a non-empty string.")
+        if not tier_key:
+            raise ValueError("tier must be a non-empty string.")
+
+        profile_root = resources.files("kicad_mcp.dfm_profiles")
+        resource_name = f"{manufacturer_key}_{tier_key}.json"
+        resource = profile_root / resource_name
+        if not resource.is_file():
+            available = sorted(
+                entry.name[:-5] for entry in profile_root.iterdir() if entry.name.endswith(".json")
+            )
+            raise FileNotFoundError(
+                f"Unknown manufacturer profile '{manufacturer_key}/{tier_key}' "
+                f"(looked for {resource_name}). "
+                f"Available profiles: {', '.join(available) or '(none)'}"
+            )
+
+        try:
+            profile = cast(dict[str, Any], json.loads(resource.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"Failed to load profile '{manufacturer_key}/{tier_key}': {exc}"
+            ) from exc
+
+        rules_block = cast(dict[str, Any], profile.get("rules") or {})
+        net_classes_block = cast(dict[str, dict[str, Any]] | None, profile.get("net_classes"))
+
+        lines: list[str] = []
+        header_label = (
+            f"{profile.get('manufacturer', manufacturer_key)} / {profile.get('tier', tier_key)}"
+        )
+        if dry_run:
+            lines.append(f"DRY RUN: would apply profile {header_label}.")
+            lines.append("No files were written.")
+        else:
+            lines.append(f"Applied profile {header_label}.")
+
+        # --- 2. Derive DRC values from profile (mirror dfm._recommended_design_rules)
+        drc_payload: _SetDesignRulesInput | None = None
+        if apply_drc:
+            if not rules_block:
+                # Profile is malformed for DRC use — be explicit so the caller
+                # knows we did not apply ANY DRC even though they asked.
+                lines.append(
+                    "DRC: NOT applied — profile has no 'rules' block. "
+                    "(This usually means the profile JSON is auxiliary data, "
+                    "e.g. a rotations table.)"
+                )
+            else:
+                min_trace = float(rules_block.get("min_trace_width_mm", 0.15))
+                min_clear = float(rules_block.get("min_trace_clearance_mm", 0.15))
+                min_drill = float(rules_block.get("min_drill_mm", 0.3))
+                min_annular = float(rules_block.get("min_annular_ring_mm", 0.13))
+                min_via_dia = float(
+                    rules_block.get(
+                        "min_via_diameter_mm",
+                        min_drill + 2.0 * min_annular,
+                    )
+                )
+                min_h2h = float(
+                    rules_block.get(
+                        "min_hole_to_hole_mm",
+                        max(2.0 * min_drill, 0.25),
+                    )
+                )
+                drc_payload = _SetDesignRulesInput(
+                    min_trace_width_mm=min_trace,
+                    min_clearance_mm=min_clear,
+                    min_via_drill_mm=min_drill,
+                    min_via_diameter_mm=min_via_dia,
+                    min_annular_ring_mm=min_annular,
+                    min_hole_to_hole_mm=min_h2h,
+                )
+                lines.append("DRC floor:")
+                lines.append(f"- Min trace width: {min_trace:.3f} mm")
+                lines.append(f"- Min clearance: {min_clear:.3f} mm")
+                lines.append(f"- Min via drill: {min_drill:.3f} mm")
+                lines.append(f"- Min via diameter: {min_via_dia:.3f} mm")
+                lines.append(f"- Min annular ring: {min_annular:.3f} mm")
+                lines.append(f"- Min hole-to-hole: {min_h2h:.3f} mm")
+        else:
+            lines.append("DRC: skipped (apply_drc=False).")
+
+        # --- 3. Build net-class rule entries ----------------------------------
+        required_nc_keys = ("width_mm", "clearance_mm", "via_diameter_mm", "via_drill_mm")
+        net_class_rules: list[tuple[str, str, dict[str, float]]] = []
+        if apply_net_classes:
+            if not net_classes_block:
+                lines.append(
+                    "Net classes: NOT applied — profile has no 'net_classes' "
+                    "block. (Older profiles may need to be regenerated.)"
+                )
+            else:
+                lines.append("Net classes:")
+                for nc_name, nc_config in net_classes_block.items():
+                    # Defensive: net_classes_block came from json.loads, so a
+                    # malformed profile could put a non-dict here. The cast()
+                    # tells pyright the shape but we still need the runtime
+                    # check.
+                    if not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
+                        nc_config, dict
+                    ):
+                        raise ValueError(
+                            f"Net class '{nc_name}' must be a JSON object, "
+                            f"got {type(nc_config).__name__}."
+                        )
+                    missing = [k for k in required_nc_keys if k not in nc_config]
+                    if missing:
+                        raise ValueError(
+                            f"Net class '{nc_name}' is missing required keys: {', '.join(missing)}."
+                        )
+                    values = {k: float(nc_config[k]) for k in required_nc_keys}
+                    rule_name, rule_body = _net_class_rule_body(
+                        nc_name,
+                        values["width_mm"],
+                        values["clearance_mm"],
+                        values["via_diameter_mm"],
+                        values["via_drill_mm"],
+                    )
+                    net_class_rules.append((rule_name, rule_body, values))
+                    lines.append(
+                        f"- {nc_name}: width={_mm(values['width_mm'])}, "
+                        f"clearance={_mm(values['clearance_mm'])}, "
+                        f"via={_mm(values['via_diameter_mm'])}/"
+                        f"drill {_mm(values['via_drill_mm'])}"
+                    )
+        else:
+            lines.append("Net classes: skipped (apply_net_classes=False).")
+
+        # --- 4. Dry-run early exit --------------------------------------------
+        if dry_run:
+            try:
+                dry_path = _rules_file_path()
+            except (OSError, ValueError) as exc:
+                # Path resolution itself doesn't modify state, but if it fails
+                # we should still surface the error so the agent knows.
+                raise ValueError(f"Cannot resolve .kicad_dru path: {exc}") from exc
+            lines.append(f"Target file (unchanged): {dry_path}")
+            return "\n".join(lines)
+
+        # --- 5. Apply DRC (if requested and possible) -------------------------
+        target_path: Path | None = None
+        if drc_payload is not None:
+            try:
+                target_path = _apply_board_design_rules(drc_payload)
+            except (OSError, ValueError) as exc:
+                return f"Manufacturer profile DRC application failed: {exc}"
+
+        # --- 6. Apply net-class rules ----------------------------------------
+        for rule_name, rule_body, _values in net_class_rules:
+            try:
+                target_path = _write_rule(rule_name, rule_body)
+            except (OSError, ValueError) as exc:
+                return f"Manufacturer profile net-class rule '{rule_name}' failed: {exc}"
+
+        if target_path is not None:
+            lines.append(f"Rules written to {target_path}.")
+        else:
+            lines.append(
+                "No rules were written (both apply_drc and apply_net_classes "
+                "were False or had no applicable data)."
+            )
+        lines.append(_PERSISTENCE_HINT)
+        return "\n".join(lines)
 
     @mcp.tool()
     @requires_kicad_running

@@ -29,6 +29,11 @@ from kicad_mcp.connection import PERSISTENCE_HINT
 # File-based tools (e.g. pcb_set_design_rules → .kicad_dru, pcb_block_place
 # → _transactional_board_write) are also excluded; their persistence is
 # different and out of this PR's scope.
+#
+# Exception: ``pcb_apply_manufacturer_profile`` writes to ``.kicad_dru``
+# (file-based) but still carries the hint because pcbnew caches design
+# rules in memory and the user typically wants to re-save the board to
+# trigger a fresh rule reload. The hint reminds the agent to follow up.
 _IPC_MUTATING_TOOLS = [
     "pcb_refill_zones",
     "pcb_add_track",
@@ -49,6 +54,7 @@ _IPC_MUTATING_TOOLS = [
     "pcb_add_zone",
     "pcb_set_keepout_zone",
     "pcb_add_teardrops",
+    "pcb_apply_manufacturer_profile",
 ]
 
 
