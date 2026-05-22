@@ -335,31 +335,49 @@ class Schematic:
             raise ApiError("KiCad returned no created item for schematic create call")
         return _kiid_from_any(results[0].item)
 
+    def _populate_label_text(
+        self,
+        label: GlobalLabel | LocalLabel | HierarchicalLabel,
+        x_mm: float,
+        y_mm: float,
+        text: str,
+    ) -> None:
+        """Common helper: set position + inner text string + sane text
+        attributes on a label proto. Without explicit ``size`` attributes
+        eeschema renders labels with zero-height text (invisible). Default
+        size is 1.27mm (50mil) which matches KiCad's own GUI default.
+        """
+        position = Vector2.from_xy_mm(x_mm, y_mm)
+        label.position.CopyFrom(position.proto)
+        inner = label.text.text
+        inner.text = text
+        inner.position.CopyFrom(position.proto)
+        # Default text height/width — 1.27mm × 1.27mm. Eeschema uses this
+        # as the GUI default for new labels, so the resulting glyphs look
+        # like a user-placed label rather than the empty bounding box you
+        # get when size is zero.
+        inner.attributes.size.x_nm = 1_270_000
+        inner.attributes.size.y_nm = 1_270_000
+
     def add_global_label(self, x_mm: float, y_mm: float, text: str) -> KIID:
         """Add a global label at ``(x_mm, y_mm)`` carrying ``text``."""
 
         label = GlobalLabel()
-        position = Vector2.from_xy_mm(x_mm, y_mm)
-        label.position.CopyFrom(position.proto)
-        label.text.text.text = text
+        self._populate_label_text(label, x_mm, y_mm, text)
         return self._create_single(label)
 
     def add_local_label(self, x_mm: float, y_mm: float, text: str) -> KIID:
         """Add a local (net-name) label at ``(x_mm, y_mm)`` carrying ``text``."""
 
         label = LocalLabel()
-        position = Vector2.from_xy_mm(x_mm, y_mm)
-        label.position.CopyFrom(position.proto)
-        label.text.text.text = text
+        self._populate_label_text(label, x_mm, y_mm, text)
         return self._create_single(label)
 
     def add_hierarchical_label(self, x_mm: float, y_mm: float, text: str) -> KIID:
         """Add a hierarchical label at ``(x_mm, y_mm)`` carrying ``text``."""
 
         label = HierarchicalLabel()
-        position = Vector2.from_xy_mm(x_mm, y_mm)
-        label.position.CopyFrom(position.proto)
-        label.text.text.text = text
+        self._populate_label_text(label, x_mm, y_mm, text)
         return self._create_single(label)
 
     def add_wire(
