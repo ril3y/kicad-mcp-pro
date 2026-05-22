@@ -2883,7 +2883,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def pcb_apply_manufacturer_profile(
+    def pcb_apply_manufacturer_profile(  # pyright: ignore[reportUnusedFunction]
         manufacturer: str,
         tier: str = "standard",
         apply_drc: bool = True,
