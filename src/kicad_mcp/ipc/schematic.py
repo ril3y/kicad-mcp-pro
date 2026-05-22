@@ -3,6 +3,8 @@
 # pyright: reportUnknownParameterType=false
 # pyright: reportUnknownArgumentType=false
 # pyright: reportMissingImports=false
+# pyright: reportAttributeAccessIssue=false
+# pyright: reportOptionalMemberAccess=false
 """IPC client for eeschema schematic editing.
 
 This module provides :class:`Schematic`, a 1:1 analogue of
@@ -38,9 +40,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from google.protobuf.empty_pb2 import Empty
-from google.protobuf.message import Message
-from kipy.client import ApiError, KiCadClient
+from google.protobuf.empty_pb2 import Empty  # type: ignore[import-untyped]
+from google.protobuf.message import Message  # type: ignore[import-untyped]
+from kipy.client import ApiError, KiCadClient  # type: ignore[attr-defined]
 from kipy.common_types import Commit
 from kipy.geometry import Vector2
 from kipy.proto.common.commands.editor_commands_pb2 import (
@@ -70,7 +72,7 @@ from kipy.proto.schematic.schematic_types_pb2 import (
     LocalLabel,
     SchematicLayer,
 )
-from kipy.util import pack_any
+from kipy.util import pack_any  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
     from kipy.kicad import KiCad
@@ -92,21 +94,21 @@ if TYPE_CHECKING:
 # NotImplementedError if the caller tries to use them on an older kipy.
 # ---------------------------------------------------------------------------
 
-_LAYER_WIRE: int = getattr(SchematicLayer, "LAYER_WIRE", SchematicLayer.SL_UNKNOWN)
+_LAYER_WIRE = getattr(SchematicLayer, "LAYER_WIRE", SchematicLayer.SL_UNKNOWN)
 
 try:  # pragma: no cover - exercised indirectly through monkeypatching in tests
     from kipy.proto.schematic.schematic_types_pb2 import (  # type: ignore[attr-defined]
         Junction as _JunctionProto,
     )
 except ImportError:  # pragma: no cover - depends on installed kipy version
-    _JunctionProto = None  # type: ignore[assignment]
+    _JunctionProto = None
 
 try:  # pragma: no cover - same rationale as above
     from kipy.proto.schematic.schematic_types_pb2 import (  # type: ignore[attr-defined]
         NoConnect as _NoConnectProto,
     )
 except ImportError:  # pragma: no cover - depends on installed kipy version
-    _NoConnectProto = None  # type: ignore[assignment]
+    _NoConnectProto = None
 
 
 def _require_schematic_response(response: CreateItemsResponse | UpdateItemsResponse) -> None:
@@ -179,13 +181,13 @@ def _kiid_from_any(packed: object) -> KIID:
     # ``Any.Unpack`` writes the inner proto into ``target`` and returns a
     # bool indicating whether the type_url matched. We already filtered by
     # suffix above, so a False here is a real error.
-    if not packed.Unpack(target):  # type: ignore[attr-defined]
+    if not packed.Unpack(target):
         raise ApiError(
             f"Failed to unpack {type_url!r} from schematic IPC response",
             raw_message=type_url,
         )
 
-    return cast(KIID, target.id)  # type: ignore[attr-defined]
+    return cast(KIID, target.id)
 
 
 class Schematic:
@@ -382,7 +384,7 @@ class Schematic:
         end = Vector2.from_xy_mm(x2_mm, y2_mm)
         line.start.CopyFrom(start.proto)
         line.end.CopyFrom(end.proto)
-        line.layer = _LAYER_WIRE
+        line.layer = cast(SchematicLayer.ValueType, _LAYER_WIRE)
         return self._create_single(line)
 
     def add_junction(self, x_mm: float, y_mm: float) -> KIID:
@@ -406,7 +408,7 @@ class Schematic:
         # The Junction proto in master mirrors LocalLabel's shape: an ``id``
         # KIID and a ``position`` Vector2. Set just the position and let
         # the server assign the KIID.
-        junction.position.CopyFrom(position.proto)  # type: ignore[attr-defined]
+        junction.position.CopyFrom(position.proto)
         return self._create_single(junction)
 
     def add_no_connect(self, x_mm: float, y_mm: float) -> KIID:
@@ -424,7 +426,7 @@ class Schematic:
 
         no_connect = _NoConnectProto()
         position = Vector2.from_xy_mm(x_mm, y_mm)
-        no_connect.position.CopyFrom(position.proto)  # type: ignore[attr-defined]
+        no_connect.position.CopyFrom(position.proto)
         return self._create_single(no_connect)
 
 
