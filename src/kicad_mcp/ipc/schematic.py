@@ -296,7 +296,7 @@ class Schematic:
         line.start.y_nm = mm_to_nm(y1_mm)
         line.end.x_nm = mm_to_nm(x2_mm)
         line.end.y_nm = mm_to_nm(y2_mm)
-        line.line_type = SchematicLineType.SLT_WIRE
+        line.type = SchematicLineType.SLT_WIRE
         return self._create_single(line)
 
     def add_junction(self, x_mm: float, y_mm: float) -> KIID:

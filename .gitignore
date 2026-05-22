@@ -87,3 +87,4 @@ requirements-build.txt
 .scratch/
 CLAUDE.md
 .mcp.json
+.claude/worktrees/

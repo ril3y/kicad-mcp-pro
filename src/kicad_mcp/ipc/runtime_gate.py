@@ -507,7 +507,7 @@ def build_wire_proto(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> 
     line.start.y_nm = _mm_to_nm(y1_mm)
     line.end.x_nm = _mm_to_nm(x2_mm)
     line.end.y_nm = _mm_to_nm(y2_mm)
-    line.line_type = SchematicLineType.SLT_WIRE
+    line.type = SchematicLineType.SLT_WIRE
     return line
 
 
