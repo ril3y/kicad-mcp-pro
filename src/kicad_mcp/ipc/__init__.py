@@ -23,6 +23,21 @@ that contains that commit.
 
 from __future__ import annotations
 
+from kicad_mcp.ipc.runtime_gate import (
+    SCH_IPC_OPT_IN_ENV,
+    SCH_IPC_PERSISTENCE_HINT,
+    reset_runtime_gate_cache,
+    route_schematic_create,
+    should_use_ipc_for_schematic_mutation,
+)
 from kicad_mcp.ipc.schematic import Schematic, open_schematic
 
-__all__ = ("Schematic", "open_schematic")
+__all__ = (
+    "SCH_IPC_OPT_IN_ENV",
+    "SCH_IPC_PERSISTENCE_HINT",
+    "Schematic",
+    "open_schematic",
+    "reset_runtime_gate_cache",
+    "route_schematic_create",
+    "should_use_ipc_for_schematic_mutation",
+)
