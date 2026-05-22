@@ -19,6 +19,13 @@ from mcp.server.fastmcp import FastMCP
 from ..config import get_config
 from ..connection import KiCadConnectionError, get_kicad
 from ..discovery import is_numbered_duplicate_kicad_file
+from ..ipc.runtime_gate import (
+    build_global_label_proto,
+    build_hierarchical_label_proto,
+    build_local_label_proto,
+    build_wire_proto,
+    route_schematic_create,
+)
 from ..models.schematic import (
     AddBusInput,
     AddBusWireEntryInput,
@@ -3505,14 +3512,22 @@ def register(mcp: FastMCP) -> None:
             (payload.x1_mm, payload.y1_mm, payload.x2_mm, payload.y2_mm),
             wire_coords,
         )
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                wire_block(*wire_coords),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    wire_block(*wire_coords),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        proto = build_wire_proto(*wire_coords)
+        outcome = str(route_schematic_create([proto], _file_path))
+        # The file path injects the snap note itself; the IPC path does
+        # not, so we append it here when it has not already appeared.
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_add_label(
@@ -3532,14 +3547,26 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(payload.name, label_x, label_y, payload.rotation),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    label_block(payload.name, label_x, label_y, payload.rotation),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        # IPC ``LocalLabel`` proto carries text and position only — the
+        # rotation accessor on the proto exists but its default of 0
+        # matches the most common case. The file-based fallback still
+        # honours rotation in full.
+        proto = build_local_label_proto(label_x, label_y, payload.name)
+        outcome = str(route_schematic_create([proto], _file_path))
+        # The file path injects the snap note itself; the IPC path does
+        # not, so we append it here when it has not already appeared.
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_add_power_symbol(
@@ -4356,21 +4383,33 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(
-                    payload.text,
-                    label_x,
-                    label_y,
-                    payload.rotation,
-                    kind="hierarchical_label",
-                    shape=payload.shape,
-                ),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    label_block(
+                        payload.text,
+                        label_x,
+                        label_y,
+                        payload.rotation,
+                        kind="hierarchical_label",
+                        shape=payload.shape,
+                    ),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        # IPC ``HierarchicalLabel`` proto in the currently-installed
+        # kipy carries text and position; the ``shape`` and rotation
+        # bits are not yet on the wire format. The file-based fallback
+        # remains the source of truth for those attributes.
+        proto = build_hierarchical_label_proto(label_x, label_y, payload.text)
+        outcome = str(route_schematic_create([proto], _file_path))
+        # The file path injects the snap note itself; the IPC path does
+        # not, so we append it here when it has not already appeared.
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_add_global_label(
@@ -4392,21 +4431,32 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(
-                    payload.text,
-                    label_x,
-                    label_y,
-                    payload.rotation,
-                    kind="global_label",
-                    shape=payload.shape,
-                ),
+
+        def _file_path() -> str:
+            transactional_write(
+                lambda current: _append_before_sheet_instances(
+                    current,
+                    label_block(
+                        payload.text,
+                        label_x,
+                        label_y,
+                        payload.rotation,
+                        kind="global_label",
+                        shape=payload.shape,
+                    ),
+                )
             )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+            result = _reload_schematic()
+            return f"{result}\n{snap_note}" if snap_note else result
+
+        # IPC ``GlobalLabel`` proto in today's kipy carries text and
+        # position; shape and rotation are not yet exposed. The
+        # file-based fallback remains the source of truth for those.
+        proto = build_global_label_proto(label_x, label_y, payload.text)
+        outcome = str(route_schematic_create([proto], _file_path))
+        # The file path injects the snap note itself; the IPC path does
+        # not, so we append it here when it has not already appeared.
+        return f"{outcome}\n{snap_note}" if snap_note and snap_note not in outcome else outcome
 
     @mcp.tool()
     def sch_list_sheets() -> str:
