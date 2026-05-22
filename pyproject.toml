@@ -102,6 +102,7 @@ include = ["src/kicad_mcp", "README.md", "LICENSE", "pyproject.toml"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["src/kicad_mcp/_master_proto/**"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "S", "ANN"]
@@ -114,6 +115,7 @@ ignore = ["S603"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+exclude = ["src/kicad_mcp/_master_proto/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

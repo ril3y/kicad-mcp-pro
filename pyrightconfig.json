@@ -1,6 +1,6 @@
 {
   "include": ["src/kicad_mcp"],
-  "exclude": ["**/__pycache__", ".venv", "dist", "site"],
+  "exclude": ["**/__pycache__", ".venv", "dist", "site", "src/kicad_mcp/_master_proto"],
   "pythonVersion": "3.12",
   "typeCheckingMode": "strict",
   "reportMissingTypeStubs": false

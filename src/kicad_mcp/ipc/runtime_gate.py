@@ -199,17 +199,29 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
             return _version_cache
 
     if kicad_factory is None:
-        # Imported lazily: bringing in ``connection`` at module scope
-        # would create a circular dependency through ``tools.schematic``
-        # which already imports from ``..connection``.
-        from ..connection import get_kicad
+        # Direct master client — kipy is deliberately NOT imported here
+        # because it ships older proto descriptors that collide with our
+        # vendored master stubs in the global protobuf descriptor pool.
+        # We construct a fresh client per call (the gate caches the
+        # final has_fix decision anyway).
+        from ._master_client import MasterKiCadClient
 
-        kicad_factory = get_kicad
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
 
     try:
-        kicad = kicad_factory()
-        version = kicad.get_version()
-        full = str(getattr(version, "full_version", "") or "")
+        # The master client doesn't expose ``.get_version`` directly;
+        # send the proto and parse the response.
+        from kicad_mcp._master_proto.mp.common.commands.base_commands_pb2 import (
+            GetVersion,
+            GetVersionResponse,
+        )
+
+        client = kicad_factory()
+        response = client.send(GetVersion(), GetVersionResponse)
+        full = str(response.version.full_version or "")
         has_fix = _full_version_has_fix(full)
     except Exception as exc:
         # ``GetVersion`` is only registered by the ``kicad.exe`` project
@@ -267,16 +279,26 @@ def _has_open_schematic(kicad_factory: _KiCadFactory | None = None) -> bool:
     """Return True iff at least one schematic document is open in eeschema."""
 
     if kicad_factory is None:
-        from ..connection import get_kicad
+        from ._master_client import MasterKiCadClient
 
-        kicad_factory = get_kicad
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
 
     try:
-        # Imported lazily here too — see ``_connected_kicad_has_fix``.
-        from kipy.proto.common.types import DocumentType
+        # Use master protos — kipy.proto stays out of the descriptor pool.
+        from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+            GetOpenDocuments,
+            GetOpenDocumentsResponse,
+        )
+        from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
 
-        kicad = kicad_factory()
-        docs = list(kicad.get_open_documents(DocumentType.DOCTYPE_SCHEMATIC))
+        client = kicad_factory()
+        cmd = GetOpenDocuments()
+        cmd.type = DocumentType.DOCTYPE_SCHEMATIC
+        response = client.send(cmd, GetOpenDocumentsResponse)
+        docs = list(response.documents)
     except Exception as exc:
         logger.info(
             "schematic_ipc_open_doc_probe_failed",
@@ -339,27 +361,32 @@ def _open_schematic_for_ipc(
     """
 
     if kicad_factory is None:
-        from ..connection import get_kicad
+        from ._master_client import MasterKiCadClient
 
-        kicad_factory = get_kicad
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
 
-    # Imported lazily: keeps the gate module importable even when the
-    # heavy proto stubs in ``ipc.schematic`` are not needed.
-    from kipy.proto.common.types import DocumentType
+        kicad_factory = _factory
+
+    # Master protos only — kipy.proto MUST NOT be imported here.
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
 
     from .schematic import Schematic
 
-    kicad = kicad_factory()
-    docs = list(kicad.get_open_documents(DocumentType.DOCTYPE_SCHEMATIC))
+    client = kicad_factory()
+    cmd = GetOpenDocuments()
+    cmd.type = DocumentType.DOCTYPE_SCHEMATIC
+    response = client.send(cmd, GetOpenDocumentsResponse)
+    docs = list(response.documents)
     if not docs:
-        # The caller should have already gated on
-        # ``should_use_ipc_for_schematic_mutation``; this branch is a
-        # defensive guard for race conditions (user closes eeschema
-        # between the gate check and the open call).
         raise RuntimeError(
             "No schematic document is open in eeschema. Cannot dispatch schematic IPC mutation."
         )
-    return Schematic(kicad, docs[0])
+    return Schematic(docs[0], client=client)
 
 
 def route_schematic_create[T](
@@ -415,64 +442,72 @@ def route_schematic_create[T](
 # ---------------------------------------------------------------------------
 
 
-def build_global_label_proto(x_mm: float, y_mm: float, text: str) -> Message:
-    """Build a ``GlobalLabel`` protobuf carrying ``text`` at ``(x_mm, y_mm)``."""
+def _mm_to_nm(value_mm: float) -> int:
+    return int(round(value_mm * 1_000_000))
 
-    from kipy.geometry import Vector2
-    from kipy.proto.schematic.schematic_types_pb2 import GlobalLabel
+
+def _populate_label(label: Any, x_mm: float, y_mm: float, text: str) -> None:  # noqa: ANN401
+    """Master proto field shape: ``label.text`` is directly base_types.Text.
+
+    Set the string + position + 1.27mm default text attributes (KiCad's
+    GUI default). Without explicit attributes eeschema renders zero-
+    size text (invisible label box).
+    """
+    x_nm = _mm_to_nm(x_mm)
+    y_nm = _mm_to_nm(y_mm)
+    label.position.x_nm = x_nm
+    label.position.y_nm = y_nm
+    label.text.text = text
+    label.text.position.x_nm = x_nm
+    label.text.position.y_nm = y_nm
+    label.text.attributes.size.x_nm = 1_270_000
+    label.text.attributes.size.y_nm = 1_270_000
+
+
+def build_global_label_proto(x_mm: float, y_mm: float, text: str) -> Message:
+    """Build a master ``GlobalLabel`` proto carrying ``text``."""
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import GlobalLabel
 
     label = GlobalLabel()
-    position = Vector2.from_xy_mm(x_mm, y_mm)
-    label.position.CopyFrom(position.proto)
-    label.text.text.text = text
+    _populate_label(label, x_mm, y_mm, text)
     return label
 
 
 def build_local_label_proto(x_mm: float, y_mm: float, text: str) -> Message:
-    """Build a ``LocalLabel`` protobuf carrying ``text`` at ``(x_mm, y_mm)``."""
+    """Build a master ``LocalLabel`` proto carrying ``text``."""
 
-    from kipy.geometry import Vector2
-    from kipy.proto.schematic.schematic_types_pb2 import LocalLabel
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import LocalLabel
 
     label = LocalLabel()
-    position = Vector2.from_xy_mm(x_mm, y_mm)
-    label.position.CopyFrom(position.proto)
-    label.text.text.text = text
+    _populate_label(label, x_mm, y_mm, text)
     return label
 
 
 def build_hierarchical_label_proto(x_mm: float, y_mm: float, text: str) -> Message:
-    """Build a ``HierarchicalLabel`` protobuf carrying ``text`` at ``(x_mm, y_mm)``."""
+    """Build a master ``HierarchicalLabel`` proto carrying ``text``."""
 
-    from kipy.geometry import Vector2
-    from kipy.proto.schematic.schematic_types_pb2 import HierarchicalLabel
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import HierarchicalLabel
 
     label = HierarchicalLabel()
-    position = Vector2.from_xy_mm(x_mm, y_mm)
-    label.position.CopyFrom(position.proto)
-    label.text.text.text = text
+    _populate_label(label, x_mm, y_mm, text)
     return label
 
 
 def build_wire_proto(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> Message:
-    """Build a ``Line`` protobuf for a schematic wire on ``LAYER_WIRE``.
+    """Build a master ``SchematicLine`` proto for a wire."""
 
-    The installed kipy ships ``SchematicLayer`` with only ``SL_UNKNOWN``;
-    we read the layer enum the same way :class:`Schematic.add_wire` does
-    so that as soon as kipy exposes ``LAYER_WIRE``, this code uses it
-    automatically.
-    """
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicLine,
+        SchematicLineType,
+    )
 
-    from kipy.geometry import Vector2
-    from kipy.proto.schematic.schematic_types_pb2 import Line, SchematicLayer
-
-    layer_wire = getattr(SchematicLayer, "LAYER_WIRE", SchematicLayer.SL_UNKNOWN)
-    line = Line()
-    start = Vector2.from_xy_mm(x1_mm, y1_mm)
-    end = Vector2.from_xy_mm(x2_mm, y2_mm)
-    line.start.CopyFrom(start.proto)
-    line.end.CopyFrom(end.proto)
-    line.layer = layer_wire
+    line = SchematicLine()
+    line.start.x_nm = _mm_to_nm(x1_mm)
+    line.start.y_nm = _mm_to_nm(y1_mm)
+    line.end.x_nm = _mm_to_nm(x2_mm)
+    line.end.y_nm = _mm_to_nm(y2_mm)
+    line.line_type = SchematicLineType.SLT_WIRE
     return line
 
 
