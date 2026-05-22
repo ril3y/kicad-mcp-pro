@@ -1,5 +1,7 @@
 """Schematic tools with parser-based reads and transactional writes."""
 
+# pyright: reportUnknownMemberType=false
+
 from __future__ import annotations
 
 import json
