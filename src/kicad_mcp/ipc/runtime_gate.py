@@ -212,14 +212,32 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
         full = str(getattr(version, "full_version", "") or "")
         has_fix = _full_version_has_fix(full)
     except Exception as exc:
-        # Fail-closed: any error (no socket, parse failure, missing
-        # attribute) flips the gate off so we keep using the file path.
-        logger.info(
-            "schematic_ipc_version_probe_failed",
-            error_type=type(exc).__name__,
-            error=str(exc),
+        # ``GetVersion`` is only registered by the ``kicad.exe`` project
+        # manager — when the user launches eeschema directly (a common
+        # workflow on nightlies and the case live-tested 2026-05-22),
+        # the version probe returns AS_UNHANDLED. We can't tell from
+        # that whether the connected build is stable or nightly, so we
+        # defer to the operator: if they explicitly opted in via the
+        # env var (already checked at this point), trust them. If the
+        # probe failed for any OTHER reason (no socket, parse error,
+        # connection refused), fail-closed.
+        message = str(exc)
+        is_unhandled = (
+            "no handler available" in message.lower() or "as_unhandled" in message.lower()
         )
-        has_fix = False
+        if is_unhandled:
+            logger.info(
+                "schematic_ipc_version_probe_unhandled_assume_ok",
+                error=message,
+            )
+            has_fix = True
+        else:
+            logger.info(
+                "schematic_ipc_version_probe_failed",
+                error_type=type(exc).__name__,
+                error=message,
+            )
+            has_fix = False
     else:
         logger.info(
             "schematic_ipc_version_probed",
