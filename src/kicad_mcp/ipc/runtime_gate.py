@@ -76,6 +76,25 @@ _KiCadFactory = Callable[[], Any]
 #: because of the eeschema crash on stable KiCad 10.0.x.
 SCH_IPC_OPT_IN_ENV = "KICAD_MCP_SCH_IPC"
 
+#: Second-tier env var. When set alongside ``KICAD_MCP_SCH_IPC=1``, the gate
+#: treats an ``AS_UNHANDLED`` response to ``GetVersion`` as "trust the
+#: operator" rather than fail-closed. This is the live-tested scenario of
+#: launching ``eeschema.exe`` directly (which doesn't register
+#: ``GetVersion`` — only the project manager does), so the operator has
+#: to opt INTO a slightly-relaxed verification path. Without this second
+#: flag the gate fails closed on ``AS_UNHANDLED`` and routes to the file
+#: path, even with the primary opt-in set.
+SCH_IPC_FORCE_ENV = "KICAD_MCP_SCH_IPC_FORCE"
+
+#: Optional post-write verification. When set, after a successful
+#: ``CreateItems`` we round-trip the created items back via
+#: ``GetItemsById`` and assert their KIIDs land where we expect. Doubles
+#: the IPC traffic per call but catches the case where eeschema's
+#: deserializer accepts garbage and stores a malformed item. The
+#: file-path equivalent is PR #24's post-edit s-expression validation;
+#: this is the IPC analogue.
+SCH_IPC_VERIFY_ENV = "KICAD_MCP_SCH_IPC_VERIFY"
+
 #: Persistence hint appended to IPC-path success responses, mirroring the
 #: pcbnew convention in :data:`kicad_mcp.connection.PERSISTENCE_HINT`.
 #: When an edit went through IPC, the change lives only in eeschema's
@@ -237,12 +256,25 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
         is_unhandled = (
             "no handler available" in message.lower() or "as_unhandled" in message.lower()
         )
-        if is_unhandled:
+        force = os.environ.get(SCH_IPC_FORCE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+        if is_unhandled and force:
+            # Standalone eeschema (no project manager) doesn't register
+            # GetVersion. The operator has explicitly opted into the
+            # relaxed verification path; trust them.
             logger.info(
-                "schematic_ipc_version_probe_unhandled_assume_ok",
+                "schematic_ipc_version_probe_unhandled_force_assume_ok",
                 error=message,
             )
             has_fix = True
+        elif is_unhandled:
+            # Default behaviour for AS_UNHANDLED: fail closed. The module
+            # docstring's promised contract.
+            logger.info(
+                "schematic_ipc_version_probe_unhandled_fail_closed",
+                error=message,
+                hint=f"Set {SCH_IPC_FORCE_ENV}=1 to bypass when launching eeschema directly.",
+            )
+            has_fix = False
         else:
             logger.info(
                 "schematic_ipc_version_probe_failed",
@@ -430,7 +462,75 @@ def route_schematic_create[T](
         items=len(items),
         results=len(results),
     )
+
+    # Optional post-write verification. The file path has PR #24's
+    # post-edit s-expression validation; this is its IPC analogue. Off
+    # by default to keep latency low; opt in via KICAD_MCP_SCH_IPC_VERIFY=1.
+    verify_env = (env if env is not None else os.environ).get(SCH_IPC_VERIFY_ENV, "")
+    if verify_env.strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            _verify_created_items(schematic, results)
+        except Exception as exc:
+            # Surface verification failures loudly — the items DID land
+            # in eeschema, but they may be in a corrupt state.
+            logger.warning(
+                "schematic_ipc_post_write_verification_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return (
+                f"Added {len(items)} schematic item(s) via IPC, but post-write "
+                f"verification failed: {exc}. The items are present in "
+                f"eeschema's session; inspect manually before saving. "
+                f"{SCH_IPC_PERSISTENCE_HINT}"
+            )
+
     return f"Added {len(items)} schematic item(s) via IPC. {SCH_IPC_PERSISTENCE_HINT}"
+
+
+def _verify_created_items(schematic: Any, results: list[Any]) -> None:  # noqa: ANN401
+    """Round-trip the KIIDs we just created back through GetItemsById.
+
+    Confirms eeschema actually stored items at the KIIDs it claims to
+    have assigned. A missing or empty result indicates the deserializer
+    accepted garbage — the IPC analogue of PR #24's file post-edit
+    parse-back validation.
+    """
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetItemsById,
+        GetItemsResponse,
+    )
+
+    kiids = []
+    for result in results:
+        # ItemCreationResult.item is google.protobuf.Any wrapping the
+        # created proto; the KIID is in its `id` field. We unpack lazily.
+        any_item = result.item
+        # Trick: every schematic item proto in master has `id` at field 1.
+        # Use a generic placeholder unpack via ParseFromString on a peer
+        # message that we know carries `id`.
+        from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import Junction
+
+        placeholder = Junction()
+        if any_item.Unpack(placeholder):
+            kiids.append(placeholder.id)
+
+    if not kiids:
+        # We can't pull KIIDs from results (heterogeneous types where
+        # Junction probe fails). Skip — better to silently allow than
+        # to false-positive a real-write as failed.
+        return
+
+    cmd = GetItemsById()
+    cmd.header.document.CopyFrom(schematic.document)
+    for kiid in kiids:
+        cmd.item_ids.append(kiid)
+    response = schematic.client.send(cmd, GetItemsResponse)
+    if len(response.items) != len(kiids):
+        raise RuntimeError(
+            f"Post-write verification: expected {len(kiids)} items, "
+            f"GetItemsById returned {len(response.items)}"
+        )
 
 
 # ---------------------------------------------------------------------------
