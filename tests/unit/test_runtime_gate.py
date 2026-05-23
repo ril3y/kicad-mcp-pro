@@ -9,13 +9,12 @@
 # pyright: reportArgumentType=false
 # pyright: reportUnusedFunction=false
 # ruff: noqa: ANN401
-"""Unit tests for :mod:`kicad_mcp.ipc.runtime_gate`.
+"""Unit tests for :mod:`kicad_mcp.ipc.runtime_gate` — IPC-only edition.
 
-The gate decides whether a schematic mutation goes through the IPC path
-(crash-prone on stable KiCad 10.0.x; safe on master/nightly) or the
-hardened file-based path. These tests pin the decision matrix down so
-that a future refactor cannot quietly re-enable the IPC path on a
-release branch that lacks the upstream fix.
+The gate decides whether a schematic mutation should be sent over IPC.
+Since 2026-05-22 there is no file-edit fallback: a closed gate causes
+the routing helper to raise :class:`SchematicIPCRequiredError` with a
+human-readable reason. These tests pin the new contract.
 
 Every IPC call is mocked through a fake ``MasterKiCadClient`` — no
 socket is opened and no KiCad process is required.
@@ -32,6 +31,7 @@ from kicad_mcp._master_proto.mp.common.commands.base_commands_pb2 import (
     GetVersionResponse,
 )
 from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+    CreateItems,
     CreateItemsResponse,
     GetOpenDocuments,
     GetOpenDocumentsResponse,
@@ -52,19 +52,19 @@ from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
 from kicad_mcp.ipc import runtime_gate
 from kicad_mcp.ipc._master_client import ApiError, MasterAny
 from kicad_mcp.ipc.runtime_gate import (
-    SCH_IPC_OPT_IN_ENV,
+    SCH_IPC_FORCE_ENV,
     SCH_IPC_PERSISTENCE_HINT,
+    SchematicIPCRequiredError,
     _connected_kicad_has_fix,
-    _env_opt_in,
     _full_version_has_fix,
     _has_open_schematic,
     build_global_label_proto,
     build_hierarchical_label_proto,
     build_local_label_proto,
     build_wire_proto,
+    check_ipc_gate,
     reset_runtime_gate_cache,
     route_schematic_create,
-    should_use_ipc_for_schematic_mutation,
 )
 
 if TYPE_CHECKING:
@@ -135,16 +135,6 @@ def _reset_cache() -> None:
     reset_runtime_gate_cache()
 
 
-@pytest.fixture
-def opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(SCH_IPC_OPT_IN_ENV, "1")
-
-
-@pytest.fixture
-def opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(SCH_IPC_OPT_IN_ENV, raising=False)
-
-
 # ---------------------------------------------------------------------------
 # _full_version_has_fix — string heuristic
 # ---------------------------------------------------------------------------
@@ -175,44 +165,6 @@ def test_full_version_has_fix(version: str, expected: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _env_opt_in
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("on", True),
-        ("TRUE", True),
-        (" On ", True),  # whitespace + case-insensitive
-        ("", False),
-        ("0", False),
-        ("false", False),
-        ("no", False),
-        ("off", False),
-        ("anything-else", False),
-        ("   ", False),  # pure whitespace
-    ],
-)
-def test_env_opt_in_explicit_dict(value: str, expected: bool) -> None:
-    assert _env_opt_in({SCH_IPC_OPT_IN_ENV: value}) is expected
-
-
-def test_env_opt_in_missing_key_is_false() -> None:
-    assert _env_opt_in({}) is False
-
-
-def test_env_opt_in_reads_os_environ_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(SCH_IPC_OPT_IN_ENV, "1")
-    assert _env_opt_in() is True
-    monkeypatch.delenv(SCH_IPC_OPT_IN_ENV)
-    assert _env_opt_in() is False
-
-
-# ---------------------------------------------------------------------------
 # _connected_kicad_has_fix
 # ---------------------------------------------------------------------------
 
@@ -230,12 +182,11 @@ def test_version_probe_returns_false_for_stable() -> None:
 
 
 def test_version_probe_fails_closed_on_no_handler_available_by_default() -> None:
-    """Default fail-closed behaviour. AS_UNHANDLED + no force flag -> False.
+    """AS_UNHANDLED + no force flag -> False.
 
     Standalone eeschema doesn't register GetVersion, so the probe gets
-    'no handler available'. The default policy is to refuse — module
-    docstring promises fail-closed. To bypass, operators set the second
-    env var KICAD_MCP_SCH_IPC_FORCE=1.
+    'no handler available'. The default policy is to refuse — operators
+    set ``KICAD_MCP_SCH_IPC_FORCE=1`` to bypass.
     """
 
     client = FakeClient(
@@ -248,9 +199,9 @@ def test_version_probe_fails_closed_on_no_handler_available_by_default() -> None
 def test_version_probe_returns_true_on_no_handler_with_force(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Force flag flips AS_UNHANDLED handling to assume-ok."""
+    """``KICAD_MCP_SCH_IPC_FORCE=1`` flips AS_UNHANDLED handling to assume-ok."""
 
-    monkeypatch.setenv("KICAD_MCP_SCH_IPC_FORCE", "1")
+    monkeypatch.setenv(SCH_IPC_FORCE_ENV, "1")
     client = FakeClient(
         raise_on=GetVersion,
         raise_with=ApiError("no handler available for GetVersion"),
@@ -261,7 +212,7 @@ def test_version_probe_returns_true_on_no_handler_with_force(
 def test_version_probe_returns_true_on_as_unhandled_with_force(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("KICAD_MCP_SCH_IPC_FORCE", "1")
+    monkeypatch.setenv(SCH_IPC_FORCE_ENV, "1")
     client = FakeClient(
         raise_on=GetVersion,
         raise_with=ApiError("AS_UNHANDLED on this message"),
@@ -306,8 +257,6 @@ def test_version_probe_caches_result_across_calls() -> None:
 
     assert first is True
     assert second is True
-    # Second call must hit the cache — factory not re-invoked, client
-    # never re-sent the GetVersion command.
     assert factory_calls == [1]
     assert len(client.sent) == 1
 
@@ -326,7 +275,6 @@ def test_reset_runtime_gate_cache_forces_reprobe() -> None:
     reset_runtime_gate_cache()
     _connected_kicad_has_fix(kicad_factory=lambda: client)
 
-    # Two GetVersion sends — cache reset between them.
     sent_versions = [c for c, _ in client.sent if isinstance(c, GetVersion)]
     assert len(sent_versions) == 2
 
@@ -334,12 +282,7 @@ def test_reset_runtime_gate_cache_forces_reprobe() -> None:
 def test_version_probe_default_factory_constructs_master_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``kicad_factory=None`` -> the default factory creates a MasterKiCadClient.
-
-    We patch the class so we don't actually dial the socket; the test
-    just verifies the default-factory branch is exercised and the
-    constructor is invoked.
-    """
+    """``kicad_factory=None`` -> the default factory creates a MasterKiCadClient."""
 
     constructed: list[Any] = []
 
@@ -364,7 +307,6 @@ def test_version_probe_default_factory_constructs_master_client(
 def test_has_open_schematic_true_when_doc_present() -> None:
     client = FakeClient(responses_by_cmd={GetOpenDocuments: [_docs_response(["a.kicad_sch"])]})
     assert _has_open_schematic(kicad_factory=lambda: client) is True
-    # Filter by DOCTYPE_SCHEMATIC.
     command, _ = client.sent[0]
     assert isinstance(command, GetOpenDocuments)
     assert command.type == DocumentType.DOCTYPE_SCHEMATIC
@@ -409,10 +351,10 @@ def test_has_open_schematic_default_factory_constructs_master_client(
 
 
 # ---------------------------------------------------------------------------
-# should_use_ipc_for_schematic_mutation — the public decision
+# check_ipc_gate — the public probe
 #
-# 8-cell matrix over (env_opt_in × has_fix × has_open_doc). Every False
-# leg short-circuits to False; only all-True returns True.
+# 4-cell matrix over (has_fix × has_open_doc). Returns (False, reason)
+# unless both gates pass.
 # ---------------------------------------------------------------------------
 
 
@@ -433,60 +375,53 @@ def _build_factory(*, has_fix: bool, has_open_doc: bool) -> Any:
     return factory
 
 
-@pytest.mark.parametrize(
-    "env_opt_in,has_fix,has_open_doc,expected",
-    [
-        (False, False, False, False),
-        (False, False, True, False),
-        (False, True, False, False),
-        (False, True, True, False),
-        (True, False, False, False),
-        (True, False, True, False),
-        (True, True, False, False),
-        (True, True, True, True),  # only all-True returns True
-    ],
-)
-def test_decision_matrix(
-    env_opt_in: bool,
-    has_fix: bool,
-    has_open_doc: bool,
-    expected: bool,
-) -> None:
-    env = {SCH_IPC_OPT_IN_ENV: "1"} if env_opt_in else {}
-    factory = _build_factory(has_fix=has_fix, has_open_doc=has_open_doc)
-
-    assert should_use_ipc_for_schematic_mutation(env=env, kicad_factory=factory) is expected
+def test_check_gate_ok_when_both_gates_pass() -> None:
+    factory = _build_factory(has_fix=True, has_open_doc=True)
+    ok, reason = check_ipc_gate(kicad_factory=factory)
+    assert ok is True
+    assert reason == ""
 
 
-def test_decision_short_circuits_on_env_off() -> None:
-    """env-off must NOT touch the IPC at all — no probe is sent."""
+def test_check_gate_false_when_version_lacks_fix() -> None:
+    factory = _build_factory(has_fix=False, has_open_doc=True)
+    ok, reason = check_ipc_gate(kicad_factory=factory)
+    assert ok is False
+    assert "fix" in reason.lower() or "version" in reason.lower()
 
-    factory_calls: list[int] = []
+
+def test_check_gate_false_when_no_open_schematic() -> None:
+    factory = _build_factory(has_fix=True, has_open_doc=False)
+    ok, reason = check_ipc_gate(kicad_factory=factory)
+    assert ok is False
+    assert "schematic" in reason.lower() and "open" in reason.lower()
+
+
+def test_check_gate_version_failure_short_circuits_before_doc_probe() -> None:
+    """When the version probe fails, we must NOT also probe for documents."""
+
+    sent_kinds: list[type] = []
 
     def factory() -> FakeClient:
-        factory_calls.append(1)
-        return FakeClient()
-
-    result = should_use_ipc_for_schematic_mutation(env={}, kicad_factory=factory)
-    assert result is False
-    assert factory_calls == []  # never dialed
-
-
-def test_decision_uses_injected_env_over_os_environ(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Explicit ``env`` argument wins even when os.environ has nothing."""
-
-    monkeypatch.delenv(SCH_IPC_OPT_IN_ENV, raising=False)
-    factory = _build_factory(has_fix=True, has_open_doc=True)
-
-    assert (
-        should_use_ipc_for_schematic_mutation(
-            env={SCH_IPC_OPT_IN_ENV: "1"},
-            kicad_factory=factory,
+        client = FakeClient(
+            responses_by_cmd={
+                GetVersion: [_version_response("10.0.3")],  # lacks fix
+                GetOpenDocuments: [_docs_response(["a.kicad_sch"])],
+            }
         )
-        is True
-    )
+        # Wrap send so we can capture command types.
+        original_send = client.send
+
+        def _record_send(command, response_cls):  # type: ignore[no-untyped-def]  # noqa: ANN202
+            sent_kinds.append(type(command))
+            return original_send(command, response_cls)
+
+        client.send = _record_send  # type: ignore[method-assign]
+        return client
+
+    ok, _ = check_ipc_gate(kicad_factory=factory)
+    assert ok is False
+    assert GetVersion in sent_kinds
+    assert GetOpenDocuments not in sent_kinds
 
 
 # ---------------------------------------------------------------------------
@@ -505,15 +440,11 @@ def test_decision_uses_injected_env_over_os_environ(
 def test_label_builders_produce_master_shape(builder: Any, proto_cls: type[Any]) -> None:
     proto = builder(10.0, 20.0, "NET1")
     assert isinstance(proto, proto_cls)
-    # Master shape: label.text -> base_types.Text directly. The string
-    # lives at label.text.text (NOT label.text.text.text as in older kipy).
     assert proto.text.text == "NET1"
     assert proto.position.x_nm == 10_000_000
     assert proto.position.y_nm == 20_000_000
-    # Inner Text proto carries its own position copy.
     assert proto.text.position.x_nm == 10_000_000
     assert proto.text.position.y_nm == 20_000_000
-    # Default 1.27 mm text size so eeschema doesn't render zero-height.
     assert proto.text.attributes.size.x_nm == 1_270_000
     assert proto.text.attributes.size.y_nm == 1_270_000
 
@@ -525,7 +456,6 @@ def test_build_wire_proto_has_correct_endpoints_and_type() -> None:
     assert proto.start.y_nm == 0
     assert proto.end.x_nm == 2_540_000
     assert proto.end.y_nm == 5_080_000
-    # Master field name is ``type`` (renamed from ``line_type`` in pcb).
     assert proto.type == SchematicLineType.SLT_WIRE
 
 
@@ -553,34 +483,36 @@ def test_build_wire_proto_coord_roundtrip(
 
 
 # ---------------------------------------------------------------------------
-# route_schematic_create — the high-level routing helper
+# route_schematic_create — IPC-only contract
 # ---------------------------------------------------------------------------
 
 
-def test_route_takes_file_path_when_gate_refuses(opt_out: None) -> None:
-    file_called: list[bool] = []
+def test_route_raises_when_version_lacks_fix() -> None:
+    """Gate closed because of stable KiCad -> SchematicIPCRequiredError."""
 
-    def fallback() -> str:
-        file_called.append(True)
-        return "file-path-result"
-
+    factory = _build_factory(has_fix=False, has_open_doc=True)
     proto = build_wire_proto(0.0, 0.0, 2.54, 0.0)
-    result = route_schematic_create([proto], fallback)
 
-    assert result == "file-path-result"
-    assert file_called == [True]
+    with pytest.raises(SchematicIPCRequiredError) as excinfo:
+        route_schematic_create([proto], kicad_factory=factory)
 
-
-def test_route_takes_file_path_returns_arbitrary_t(opt_out: None) -> None:
-    """``file_fallback`` may return any type; route preserves it verbatim."""
-
-    sentinel: dict[str, Any] = {"hello": 1}
-    result = route_schematic_create([], lambda: sentinel)
-    assert result is sentinel
+    assert "fix" in excinfo.value.reason.lower() or "version" in excinfo.value.reason.lower()
 
 
-def test_route_takes_ipc_path_when_gate_permits() -> None:
-    """Full gate-pass: env on, master version, schematic open -> IPC."""
+def test_route_raises_when_no_schematic_open() -> None:
+    """Gate closed because no doc open -> SchematicIPCRequiredError."""
+
+    factory = _build_factory(has_fix=True, has_open_doc=False)
+    proto = build_wire_proto(0.0, 0.0, 2.54, 0.0)
+
+    with pytest.raises(SchematicIPCRequiredError) as excinfo:
+        route_schematic_create([proto], kicad_factory=factory)
+
+    assert "schematic" in excinfo.value.reason.lower()
+
+
+def test_route_dispatches_ipc_when_gate_permits() -> None:
+    """Full gate-pass: master version + schematic open -> IPC."""
 
     create_response = _ok_create_response()
     client = FakeClient(
@@ -592,36 +524,16 @@ def test_route_takes_ipc_path_when_gate_permits() -> None:
                 # Second call: _open_schematic_for_ipc.
                 _docs_response(["a.kicad_sch"]),
             ],
-            CreateItemsResponse: [],  # never sent as command, only as response_cls
+            CreateItems: [create_response],
         }
     )
-    # We need to capture the actual CreateItems command. Add the create
-    # response on the fly by using a side-channel: the FakeClient
-    # returns CreateItemsResponse for the CreateItems command.
-    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import CreateItems
-
-    client._responses[CreateItems] = [create_response]
-
-    fallback_called: list[bool] = []
-
-    def fallback() -> str:
-        fallback_called.append(True)
-        return "file-path"
 
     proto = build_wire_proto(0.0, 0.0, 2.54, 0.0)
-    result = route_schematic_create(
-        [proto],
-        fallback,
-        env={SCH_IPC_OPT_IN_ENV: "1"},
-        kicad_factory=lambda: client,
-    )
+    result = route_schematic_create([proto], kicad_factory=lambda: client)
 
-    assert fallback_called == []
     assert isinstance(result, str)
     assert "via IPC" in result
     assert SCH_IPC_PERSISTENCE_HINT in result
-    # Persistence hint mentions sch_save() — required by the
-    # PERSISTENCE_HINT convention so agents call save afterward.
     assert "sch_save()" in result
 
 
@@ -629,15 +541,12 @@ def test_route_returns_item_count_in_message() -> None:
     """The IPC success message includes the count of items created."""
 
     create_response = _ok_create_response()
-    # Add a second OK item so we can assert "2" appears in the message.
     second = ItemCreationResult()
     second.status.code = ItemStatusCode.ISC_OK
     any_item = MasterAny()
     any_item.Pack(GlobalLabel())
     second.item.CopyFrom(any_item)
     create_response.created_items.append(second)
-
-    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import CreateItems
 
     client = FakeClient(
         responses_by_cmd={
@@ -652,13 +561,11 @@ def test_route_returns_item_count_in_message() -> None:
 
     result = route_schematic_create(
         [build_wire_proto(0, 0, 1, 1), build_wire_proto(0, 0, 2, 2)],
-        lambda: "file-path",
-        env={SCH_IPC_OPT_IN_ENV: "1"},
         kicad_factory=lambda: client,
     )
 
     assert isinstance(result, str)
-    assert "2" in result  # we sent 2 items
+    assert "2" in result
 
 
 # ---------------------------------------------------------------------------
@@ -700,3 +607,27 @@ def test_open_schematic_for_ipc_default_factory(monkeypatch: pytest.MonkeyPatch)
 
     assert isinstance(result, Schematic)
     assert len(constructed) == 1
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility removal checks
+# ---------------------------------------------------------------------------
+
+
+def test_no_env_opt_in_helper_remains() -> None:
+    """The opt-in env var was removed when the file-edit fallback was deleted.
+
+    There should be no ``SCH_IPC_OPT_IN_ENV`` / ``_env_opt_in`` /
+    ``should_use_ipc_for_schematic_mutation`` exports remaining on the
+    module — keeping them would re-introduce silent-fallback semantics.
+    """
+
+    assert not hasattr(runtime_gate, "SCH_IPC_OPT_IN_ENV")
+    assert not hasattr(runtime_gate, "_env_opt_in")
+    assert not hasattr(runtime_gate, "should_use_ipc_for_schematic_mutation")
+
+
+def test_schematic_ipc_required_error_carries_reason() -> None:
+    err = SchematicIPCRequiredError("anything went wrong")
+    assert err.reason == "anything went wrong"
+    assert "anything went wrong" in str(err)

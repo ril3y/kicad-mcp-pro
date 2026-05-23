@@ -433,6 +433,68 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
         """Export the schematic to PDF."""
         return _with_low_level_export_notice(_export_sch_pdf())
 
+    @mcp.tool()
+    @headless_compatible
+    def sch_export_png(dpi: int = 150, page: int = 1) -> str:
+        """Export the schematic as a PNG (renders the saved file, not live IPC state).
+
+        Wraps ``export_sch_pdf`` and rasterizes the resulting PDF via
+        PyMuPDF. Use this to get a quick visual screenshot the agent can
+        read directly.
+
+        Args:
+            dpi: render resolution. 150 = good balance, 300 = print-grade.
+            page: which schematic sheet (1-based) to render when the
+                project has hierarchical sheets.
+
+        Returns the absolute path of the written PNG.
+        """
+        sch_file = _get_sch_file()
+        out_dir = _ensure_output_dir()
+        pdf_path = out_dir / "schematic.pdf"
+        png_path = out_dir / "schematic.png"
+
+        variant_args = _active_variant_args()
+        code, stdout, stderr = _run_cli_variants(
+            [
+                ["sch", "export", "pdf", *variant_args, "--output", str(pdf_path), str(sch_file)],
+                [
+                    "sch",
+                    "export",
+                    "pdf",
+                    *variant_args,
+                    "--input",
+                    str(sch_file),
+                    "--output",
+                    str(pdf_path),
+                ],
+            ]
+        )
+        if code != 0:
+            return f"Schematic PDF export failed: {stderr or stdout or 'unknown error'}"
+
+        try:
+            import pymupdf  # type: ignore[import-not-found]
+        except ImportError:
+            return (
+                f"PDF exported to {pdf_path} but pymupdf is not installed; "
+                "run `pip install pymupdf` (or `uv add pymupdf`) in the kicad-mcp venv."
+            )
+
+        try:
+            doc = pymupdf.open(str(pdf_path))
+            if page < 1 or page > doc.page_count:
+                doc.close()
+                return f"Page {page} out of range (PDF has {doc.page_count} page(s))"
+            zoom = dpi / 72.0  # PDF native is 72 dpi
+            pix = doc[page - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+            pix.save(str(png_path))
+            doc.close()
+        except Exception as exc:  # noqa: BLE001
+            return f"PNG rasterization failed: {exc}"
+
+        return f"Schematic PNG exported to {png_path}"
+
     def _export_step(output_path: str = "") -> str:
         pcb_file = _get_pcb_file()
         caps = get_cli_capabilities(get_config().kicad_cli)

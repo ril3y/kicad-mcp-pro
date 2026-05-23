@@ -4,7 +4,7 @@
 # pyright: reportUnknownArgumentType=false
 # pyright: reportMissingImports=false
 # pyright: reportAttributeAccessIssue=false
-"""Runtime gate that picks between the IPC and file-based schematic edit paths.
+"""Runtime gate for IPC-only schematic mutations.
 
 Why this module exists
 ----------------------
@@ -13,30 +13,31 @@ The IPC path for schematic edits (``kicad_mcp.ipc.schematic.Schematic``)
 crashes eeschema on every KiCad 10.0.x stable release shipped to date —
 the input-validation handler in ``api_handler_sch.cpp`` is a TODO stub
 until upstream commit ``3dca4e0e38`` ("API: implement schematic item
-creation", Jon Evans, 2026-04-07), which is currently only on master and
-nightly builds. Until users run a KiCad that contains that fix, calling
-the IPC mutation surface scrambles the editor and risks corrupting the
-schematic.
+creation", Jon Evans, 2026-04-07), which lands on master / nightly. If
+the connected KiCad lacks that fix the IPC mutation surface scrambles
+the editor and risks corrupting the schematic.
 
-So the IPC path stays OFF by default. Operators opt in via the
-``KICAD_MCP_SCH_IPC=1`` environment variable, and we additionally verify
-at runtime that the connected KiCad reports a version new enough to
-include the fix.
+Contract (2026-05-22)
+---------------------
+
+There is NO file-edit fallback. ``sch_add_*`` mutations either dispatch
+over IPC or raise :class:`SchematicIPCRequiredError`. The deletion of
+the fallback was a deliberate user-driven change after a session where
+the silent file-edit path overwrote IPC-resident state — see the
+``feedback_sch_mcp_incident_*`` and ``feedback_sch_ipc_*`` memories.
 
 Design notes
 ------------
 
-* **Fail-closed.** Any error — connect refused, parse failure, missing
-  attribute — resolves to "use the file path". The file path has its own
-  hardening from PR #24 (lock detection, post-edit validation) and is
-  the safer default until proven otherwise.
+* **Fail-loud.** Any gate miss (missing fix, no open schematic, version
+  probe failure) raises with a concrete reason. Callers do not get to
+  silently write the file.
 * **Cache once per server start.** The connected KiCad version cannot
   change without a process restart, so we memoise the detection result.
-  Callers can reset it via :func:`reset_runtime_gate_cache` (used in
-  tests).
+  Callers can reset it via :func:`reset_runtime_gate_cache` (tests).
 * **Observability.** Every routing decision is logged at INFO with a
   reason field so the user can grep ``schematic_route_decision`` to see
-  why the gate chose the path it did.
+  why the gate raised.
 """
 
 from __future__ import annotations
@@ -72,30 +73,22 @@ _KiCadFactory = Callable[[], Any]
 # Public constants
 # ---------------------------------------------------------------------------
 
-#: Environment variable that opts in to the IPC path. The default is OFF
-#: because of the eeschema crash on stable KiCad 10.0.x.
-SCH_IPC_OPT_IN_ENV = "KICAD_MCP_SCH_IPC"
-
-#: Second-tier env var. When set alongside ``KICAD_MCP_SCH_IPC=1``, the gate
-#: treats an ``AS_UNHANDLED`` response to ``GetVersion`` as "trust the
-#: operator" rather than fail-closed. This is the live-tested scenario of
-#: launching ``eeschema.exe`` directly (which doesn't register
+#: When set, the gate treats an ``AS_UNHANDLED`` response to ``GetVersion``
+#: as "trust the operator" instead of raising. This is the standalone-
+#: eeschema case (eeschema launched directly doesn't register
 #: ``GetVersion`` — only the project manager does), so the operator has
-#: to opt INTO a slightly-relaxed verification path. Without this second
-#: flag the gate fails closed on ``AS_UNHANDLED`` and routes to the file
-#: path, even with the primary opt-in set.
+#: to opt INTO a slightly-relaxed verification path. Without this flag
+#: the gate raises on ``AS_UNHANDLED``.
 SCH_IPC_FORCE_ENV = "KICAD_MCP_SCH_IPC_FORCE"
 
 #: Optional post-write verification. When set, after a successful
 #: ``CreateItems`` we round-trip the created items back via
 #: ``GetItemsById`` and assert their KIIDs land where we expect. Doubles
 #: the IPC traffic per call but catches the case where eeschema's
-#: deserializer accepts garbage and stores a malformed item. The
-#: file-path equivalent is PR #24's post-edit s-expression validation;
-#: this is the IPC analogue.
+#: deserializer accepts garbage and stores a malformed item.
 SCH_IPC_VERIFY_ENV = "KICAD_MCP_SCH_IPC_VERIFY"
 
-#: Persistence hint appended to IPC-path success responses, mirroring the
+#: Persistence hint appended to IPC success responses, mirroring the
 #: pcbnew convention in :data:`kicad_mcp.connection.PERSISTENCE_HINT`.
 #: When an edit went through IPC, the change lives only in eeschema's
 #: in-memory document; the user MUST call ``sch_save()`` to flush.
@@ -103,6 +96,20 @@ SCH_IPC_PERSISTENCE_HINT = (
     "Call sch_save() to persist — the change is in eeschema's session only and "
     "will be lost if the editor closes without saving."
 )
+
+
+class SchematicIPCRequiredError(RuntimeError):
+    """Raised when a schematic mutation cannot be dispatched over IPC.
+
+    There is no file-edit fallback. Callers receive this exception with
+    a concrete ``reason`` describing what gate failed (version missing
+    fix, no open schematic, connection refused, etc.) so the operator
+    can act on it.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +263,25 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
         is_unhandled = (
             "no handler available" in message.lower() or "as_unhandled" in message.lower()
         )
-        force = os.environ.get(SCH_IPC_FORCE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+        force_env = os.environ.get(SCH_IPC_FORCE_ENV, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        # Fallback: flag file at ~/.kicad-mcp-force-ipc. On Windows the User
+        # env var is unreliable for child processes of GUI shells (Claude
+        # Code, VS Code, etc.) that don't re-read HKCU\Environment on
+        # WM_SETTINGCHANGE. A flag file is read fresh every invocation.
+        force_file = False
+        try:
+            from pathlib import Path as _Path
+
+            if (_Path.home() / ".kicad-mcp-force-ipc").exists():
+                force_file = True
+        except Exception:  # noqa: BLE001, S110
+            pass
+        force = force_env or force_file
         if is_unhandled and force:
             # Standalone eeschema (no project manager) doesn't register
             # GetVersion. The operator has explicitly opted into the
@@ -299,14 +324,6 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
 # ---------------------------------------------------------------------------
 
 
-def _env_opt_in(env: dict[str, str] | None = None) -> bool:
-    """Return True iff the ``KICAD_MCP_SCH_IPC`` opt-in is set to a truthy value."""
-
-    source = env if env is not None else os.environ
-    raw = source.get(SCH_IPC_OPT_IN_ENV, "")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _has_open_schematic(kicad_factory: _KiCadFactory | None = None) -> bool:
     """Return True iff at least one schematic document is open in eeschema."""
 
@@ -341,40 +358,42 @@ def _has_open_schematic(kicad_factory: _KiCadFactory | None = None) -> bool:
     return bool(docs)
 
 
-def should_use_ipc_for_schematic_mutation(
+def check_ipc_gate(
     *,
-    env: dict[str, str] | None = None,
     kicad_factory: _KiCadFactory | None = None,
-) -> bool:
-    """Return True iff a schematic mutation should be sent over IPC.
+) -> tuple[bool, str]:
+    """Probe the IPC gate. Returns ``(ok, reason)``.
 
-    All three of these must be true at once:
+    ``ok`` is True only when both of these hold:
 
-    1. The operator has opted in via ``KICAD_MCP_SCH_IPC=1``.
-    2. The connected KiCad reports a version containing the fix.
-    3. There is at least one open schematic document.
+    1. The connected KiCad reports a version containing the fix.
+    2. There is at least one open schematic document.
 
-    Any failure resolves to ``False`` (the file-based path).
+    On failure ``reason`` is a human-readable string explaining which
+    gate failed. There is no fallback — the caller is expected to either
+    proceed (``ok=True``) or raise :class:`SchematicIPCRequiredError`.
     """
 
-    if not _env_opt_in(env):
-        logger.info("schematic_route_decision", path="file", reason="env_opt_in_off")
-        return False
-
     if not _connected_kicad_has_fix(kicad_factory):
-        logger.info(
-            "schematic_route_decision",
-            path="file",
-            reason="version_lacks_fix_or_probe_failed",
+        reason = (
+            "KiCad IPC version does not contain the schematic-IPC fix "
+            "(commit 3dca4e0e38, first shipped on 10.99 / nightly). "
+            f"If you are running standalone eeschema, set {SCH_IPC_FORCE_ENV}=1 "
+            "to bypass the version probe."
         )
-        return False
+        logger.info("schematic_route_decision", path="raise", reason="version_lacks_fix")
+        return False, reason
 
     if not _has_open_schematic(kicad_factory):
-        logger.info("schematic_route_decision", path="file", reason="no_open_schematic")
-        return False
+        reason = (
+            "No schematic document is open in eeschema. Open the project "
+            "in eeschema before calling schematic mutation tools."
+        )
+        logger.info("schematic_route_decision", path="raise", reason="no_open_schematic")
+        return False, reason
 
     logger.info("schematic_route_decision", path="ipc", reason="all_gates_passed")
-    return True
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -421,40 +440,38 @@ def _open_schematic_for_ipc(
     return Schematic(docs[0], client=client)
 
 
-def route_schematic_create[T](
+def route_schematic_create(
     items: list[Message],
-    file_fallback: Callable[[], T],
     *,
     env: dict[str, str] | None = None,
     kicad_factory: _KiCadFactory | None = None,
-) -> str | T:
-    """Route a schematic create-items call to IPC if the gate permits.
+) -> str:
+    """Dispatch a schematic create-items call over IPC.
 
     Parameters
     ----------
     items:
-        The pre-built protobuf messages to send if the IPC path is
-        taken. The list is opaque to the gate.
-    file_fallback:
-        A zero-argument callable that performs the equivalent
-        file-based mutation. Its return value is returned directly when
-        the IPC path is gated off.
+        The pre-built protobuf messages to send.
     env, kicad_factory:
         Test seams; production callers leave them ``None``.
 
     Returns
     -------
-    str | T
-        On the IPC path, a success string with the persistence hint
-        suffixed. On the file path, the return value of ``file_fallback``.
+    str
+        Success string with the persistence hint suffixed.
+
+    Raises
+    ------
+    SchematicIPCRequiredError
+        When the IPC gate cannot be opened (KiCad lacks the fix, no
+        schematic open, version probe failed, etc.). The exception's
+        ``reason`` attribute describes the failure.
     """
 
-    if not should_use_ipc_for_schematic_mutation(env=env, kicad_factory=kicad_factory):
-        return file_fallback()
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
 
-    # The gate said go. Build a Schematic and dispatch. Any failure here
-    # bubbles up — by this point we are on the explicit opt-in path and
-    # the operator wants to see real errors instead of silent fallback.
     schematic = _open_schematic_for_ipc(kicad_factory=kicad_factory)
     results = schematic.create_items(items)
     logger.info(
@@ -463,9 +480,7 @@ def route_schematic_create[T](
         results=len(results),
     )
 
-    # Optional post-write verification. The file path has PR #24's
-    # post-edit s-expression validation; this is its IPC analogue. Off
-    # by default to keep latency low; opt in via KICAD_MCP_SCH_IPC_VERIFY=1.
+    # Optional post-write verification, opt-in via KICAD_MCP_SCH_IPC_VERIFY=1.
     verify_env = (env if env is not None else os.environ).get(SCH_IPC_VERIFY_ENV, "")
     if verify_env.strip().lower() in {"1", "true", "yes", "on"}:
         try:
@@ -486,6 +501,123 @@ def route_schematic_create[T](
             )
 
     return f"Added {len(items)} schematic item(s) via IPC. {SCH_IPC_PERSISTENCE_HINT}"
+
+
+def route_schematic_place_symbol(
+    *,
+    library: str,
+    symbol_name: str,
+    x_mm: float,
+    y_mm: float,
+    reference: str = "",
+    value: str = "",
+    unit: int = 1,
+    orientation_degrees: int = 0,
+    mirror_x: bool = False,
+    mirror_y: bool = False,
+    kicad_factory: _KiCadFactory | None = None,
+) -> str:
+    """Dispatch a `PlaceLibrarySymbol` IPC call to eeschema.
+
+    Mirrors the GUI's "place from library" path one-to-one — KiCad
+    constructs the SCH_SYMBOL via its own constructor, handling pin
+    transforms, default field positions, attribute inheritance, etc.
+    Single IPC call; no client-side proto juggling.
+
+    Requires KiCad ≥ the build that contains the `PlaceLibrarySymbol`
+    handler (our upstream patch on master branch
+    `feat/ipc-get-library-symbol`). When the gate is closed,
+    :class:`SchematicIPCRequiredError` is raised.
+    """
+
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    # Master protos only — kipy.proto stays out of the descriptor pool.
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+    from kicad_mcp._master_proto.mp.schematic.schematic_commands_pb2 import (
+        PlaceLibrarySymbol,
+        PlaceLibrarySymbolResponse,
+    )
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicSymbolOrientation,
+    )
+
+    client = kicad_factory()
+
+    # Resolve the active schematic document.
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs_resp = client.send(docs_req, GetOpenDocumentsResponse)
+    docs = list(docs_resp.documents)
+    if not docs:
+        raise SchematicIPCRequiredError(
+            "No schematic document is open in eeschema. Cannot dispatch PlaceLibrarySymbol."
+        )
+    doc = docs[0]
+
+    place = PlaceLibrarySymbol()
+    place.document.CopyFrom(doc)
+    place.id.library_nickname = library
+    place.id.entry_name = symbol_name
+    place.position.x_nm = int(round(x_mm * 1_000_000))
+    place.position.y_nm = int(round(y_mm * 1_000_000))
+    if reference:
+        place.reference = reference
+    if value:
+        place.value = value
+    if unit and unit > 1:
+        place.unit = unit
+
+    orientation_map = {
+        0: SchematicSymbolOrientation.SSO_0,
+        90: SchematicSymbolOrientation.SSO_90,
+        180: SchematicSymbolOrientation.SSO_180,
+        270: SchematicSymbolOrientation.SSO_270,
+    }
+    if orientation_degrees in orientation_map:
+        place.orientation = orientation_map[orientation_degrees]
+    elif orientation_degrees:
+        raise ValueError(
+            f"orientation_degrees must be one of 0/90/180/270; got {orientation_degrees}"
+        )
+
+    if mirror_x:
+        place.mirror_x = True
+    if mirror_y:
+        place.mirror_y = True
+
+    response = client.send(place, PlaceLibrarySymbolResponse)
+    placed_id = response.placed.id.value
+    logger.info(
+        "schematic_ipc_place_symbol_succeeded",
+        library=library,
+        symbol_name=symbol_name,
+        x_mm=x_mm,
+        y_mm=y_mm,
+        reference=reference,
+        kiid=placed_id,
+    )
+    return (
+        f"Placed {library}:{symbol_name} as "
+        f"{reference or '(auto-ref)'} ({value or 'default'}) at "
+        f"({x_mm:.2f}, {y_mm:.2f}) mm via IPC. "
+        f"KIID={placed_id}. "
+        f"{SCH_IPC_PERSISTENCE_HINT}"
+    )
 
 
 def _verify_created_items(schematic: Any, results: list[Any]) -> None:  # noqa: ANN401
@@ -562,15 +694,32 @@ def _populate_label(label: Any, x_mm: float, y_mm: float, text: str) -> None:  #
     label.text.position.y_nm = y_nm
     label.text.attributes.size.x_nm = 1_270_000
     label.text.attributes.size.y_nm = 1_270_000
+    # Without explicit alignment, text centers on the anchor and
+    # straddles the flat edge of the pentagon body (see incident
+    # 2026-05-22). Match the GUI default: left-aligned, vertically
+    # centered.
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import HA_LEFT, VA_CENTER
+
+    label.text.attributes.horizontal_alignment = HA_LEFT
+    label.text.attributes.vertical_alignment = VA_CENTER
 
 
 def build_global_label_proto(x_mm: float, y_mm: float, text: str) -> Message:
-    """Build a master ``GlobalLabel`` proto carrying ``text``."""
+    """Build a master ``GlobalLabel`` proto carrying ``text``.
 
-    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import GlobalLabel
+    Matches GUI default: ``SCH_GLOBALLABEL`` constructs with
+    ``LABEL_FLAG_SHAPE::L_BIDI`` (sch_label.cpp:2105). Leaving
+    ``shape`` unset (= ``SLSH_UNKNOWN``) renders a plain rectangle.
+    """
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SLSH_BIDI,
+        GlobalLabel,
+    )
 
     label = GlobalLabel()
     _populate_label(label, x_mm, y_mm, text)
+    label.shape = SLSH_BIDI
     return label
 
 
@@ -658,6 +807,69 @@ def build_no_connect_proto(x_mm: float, y_mm: float) -> Message:
     return marker
 
 
+def build_text_proto(
+    x_mm: float,
+    y_mm: float,
+    text: str,
+    *,
+    size_mm: float = 1.27,
+) -> Message:
+    """Build a master ``SchematicText`` proto (free-floating note)."""
+
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import HA_LEFT, VA_CENTER
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import SchematicText
+
+    sch_text = SchematicText()
+    sch_text.text.text = text
+    sch_text.text.position.x_nm = _mm_to_nm(x_mm)
+    sch_text.text.position.y_nm = _mm_to_nm(y_mm)
+    sch_text.text.attributes.size.x_nm = _mm_to_nm(size_mm)
+    sch_text.text.attributes.size.y_nm = _mm_to_nm(size_mm)
+    sch_text.text.attributes.horizontal_alignment = HA_LEFT
+    sch_text.text.attributes.vertical_alignment = VA_CENTER
+    if "\n" in text:
+        sch_text.text.attributes.multiline = True
+        sch_text.text.attributes.line_spacing = 1.0
+    return sch_text
+
+
+def build_textbox_proto(
+    x1_mm: float,
+    y1_mm: float,
+    x2_mm: float,
+    y2_mm: float,
+    text: str,
+    *,
+    size_mm: float = 1.27,
+) -> Message:
+    """Build a master ``SchematicTextBox`` proto (annotated note with border)."""
+
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import HA_LEFT, VA_TOP
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicTextBox,
+    )
+
+    box = SchematicTextBox()
+    box.textbox.text = text
+    box.textbox.top_left.x_nm = _mm_to_nm(min(x1_mm, x2_mm))
+    box.textbox.top_left.y_nm = _mm_to_nm(min(y1_mm, y2_mm))
+    box.textbox.bottom_right.x_nm = _mm_to_nm(max(x1_mm, x2_mm))
+    box.textbox.bottom_right.y_nm = _mm_to_nm(max(y1_mm, y2_mm))
+    box.textbox.attributes.size.x_nm = _mm_to_nm(size_mm)
+    box.textbox.attributes.size.y_nm = _mm_to_nm(size_mm)
+    box.textbox.attributes.horizontal_alignment = HA_LEFT
+    box.textbox.attributes.vertical_alignment = VA_TOP
+    box.textbox.attributes.multiline = True
+    box.textbox.attributes.line_spacing = 1.0
+    # Small interior margins so text doesn't crash into the border.
+    margin_nm = _mm_to_nm(0.635)  # half a fine-grid step
+    box.margin_left.value_nm = margin_nm
+    box.margin_right.value_nm = margin_nm
+    box.margin_top.value_nm = margin_nm
+    box.margin_bottom.value_nm = margin_nm
+    return box
+
+
 #: Mapping from the file-path ``direction`` string used by
 #: ``sch_add_bus_wire_entry`` to the (dx_mm, dy_mm) size vector that the
 #: file-format ``bus_entry`` block emits. Keep these in sync with
@@ -705,9 +917,260 @@ def build_bus_wire_entry_proto(x_mm: float, y_mm: float, direction: str) -> Mess
     return entry
 
 
+def route_schematic_save(
+    *,
+    kicad_factory: _KiCadFactory | None = None,
+) -> str:
+    """Persist the live schematic session to disk via IPC ``SaveDocument``.
+
+    Returns a one-line success message. Raises
+    :class:`SchematicIPCRequiredError` if the gate is closed.
+    """
+
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    from google.protobuf.empty_pb2 import Empty
+
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.commands.project_commands_pb2 import (
+        SaveDocument,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+
+    client = kicad_factory()
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    if not docs:
+        raise SchematicIPCRequiredError(
+            "No schematic document is open in eeschema. Cannot dispatch SaveDocument."
+        )
+    doc = docs[0]
+
+    save = SaveDocument()
+    save.document.CopyFrom(doc)
+    client.send(save, Empty)
+    logger.info("schematic_ipc_save_succeeded", project=doc.project.name)
+    return f"Saved schematic '{doc.project.name}' to disk via IPC."
+
+
+def route_schematic_delete_by_reference(
+    reference: str,
+    *,
+    kicad_factory: _KiCadFactory | None = None,
+) -> tuple[int, int]:
+    """Delete every SCH_SYMBOL whose reference designator matches ``reference``.
+
+    Returns ``(symbols_deleted, wires_deleted)``. Wires are not auto-removed
+    by this function — only the symbols. (Wire cleanup happens in
+    eeschema when the user reroutes; KiCad does not currently maintain
+    a strict "delete-attached-wires" invariant on IPC delete.)
+
+    Raises :class:`SchematicIPCRequiredError` if the gate is closed.
+    """
+
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        DeleteItems,
+        DeleteItemsResponse,
+        GetItems,
+        GetItemsResponse,
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import KOT_SCH_SYMBOL
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicSymbolInstance,
+    )
+
+    client = kicad_factory()
+
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    if not docs:
+        raise SchematicIPCRequiredError(
+            "No schematic document is open in eeschema. Cannot dispatch DeleteItems."
+        )
+    doc = docs[0]
+
+    get = GetItems()
+    get.header.document.CopyFrom(doc)
+    get.types.append(KOT_SCH_SYMBOL)
+    items = list(client.send(get, GetItemsResponse).items)
+
+    delete = DeleteItems()
+    delete.header.document.CopyFrom(doc)
+    matched = 0
+    for any_item in items:
+        inst = SchematicSymbolInstance()
+        if not any_item.Unpack(inst):
+            continue
+        if inst.reference_field.text.text == reference and inst.id.value:
+            delete.item_ids.add().value = inst.id.value
+            matched += 1
+
+    if matched == 0:
+        return (0, 0)
+
+    client.send(delete, DeleteItemsResponse)
+    logger.info(
+        "schematic_ipc_delete_by_reference_succeeded",
+        reference=reference,
+        symbols_deleted=matched,
+    )
+    return (matched, 0)
+
+
+def route_schematic_clear_all(
+    *,
+    kicad_factory: _KiCadFactory | None = None,
+) -> dict[str, int]:
+    """Delete every schematic item — symbols, wires, labels, junctions, etc.
+
+    Returns a dict of per-type deletion counts. Raises
+    :class:`SchematicIPCRequiredError` if the gate is closed.
+    """
+
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        DeleteItems,
+        DeleteItemsResponse,
+        GetItems,
+        GetItemsResponse,
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import (
+        KOT_SCH_BUS_WIRE_ENTRY,
+        KOT_SCH_DIRECTIVE_LABEL,
+        KOT_SCH_GLOBAL_LABEL,
+        KOT_SCH_HIER_LABEL,
+        KOT_SCH_JUNCTION,
+        KOT_SCH_LABEL,
+        KOT_SCH_LINE,
+        KOT_SCH_NO_CONNECT,
+        KOT_SCH_SYMBOL,
+        KOT_SCH_TEXT,
+        KOT_SCH_TEXTBOX,
+    )
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        BusEntry,
+        DirectiveLabel,
+        GlobalLabel,
+        HierarchicalLabel,
+        Junction,
+        LocalLabel,
+        NoConnectMarker,
+        SchematicLine,
+        SchematicSymbolInstance,
+        SchematicText,
+        SchematicTextBox,
+    )
+
+    client = kicad_factory()
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    if not docs:
+        raise SchematicIPCRequiredError(
+            "No schematic document is open in eeschema. Cannot dispatch DeleteItems."
+        )
+    doc = docs[0]
+
+    get = GetItems()
+    get.header.document.CopyFrom(doc)
+    for kot in (
+        KOT_SCH_SYMBOL,
+        KOT_SCH_LINE,
+        KOT_SCH_GLOBAL_LABEL,
+        KOT_SCH_LABEL,
+        KOT_SCH_HIER_LABEL,
+        KOT_SCH_DIRECTIVE_LABEL,
+        KOT_SCH_JUNCTION,
+        KOT_SCH_NO_CONNECT,
+        KOT_SCH_BUS_WIRE_ENTRY,
+        KOT_SCH_TEXT,
+        KOT_SCH_TEXTBOX,
+    ):
+        get.types.append(kot)
+    items = list(client.send(get, GetItemsResponse).items)
+
+    candidate_types = (
+        ("symbols", SchematicSymbolInstance),
+        ("wires_buses", SchematicLine),
+        ("global_labels", GlobalLabel),
+        ("local_labels", LocalLabel),
+        ("hier_labels", HierarchicalLabel),
+        ("directive_labels", DirectiveLabel),
+        ("junctions", Junction),
+        ("no_connect_markers", NoConnectMarker),
+        ("bus_entries", BusEntry),
+        ("texts", SchematicText),
+        ("textboxes", SchematicTextBox),
+    )
+
+    delete = DeleteItems()
+    delete.header.document.CopyFrom(doc)
+    counts: dict[str, int] = {key: 0 for key, _ in candidate_types}
+    for any_item in items:
+        for key, kls in candidate_types:
+            msg = kls()
+            if any_item.Unpack(msg) and msg.id.value:
+                delete.item_ids.add().value = msg.id.value
+                counts[key] += 1
+                break
+
+    if delete.item_ids:
+        client.send(delete, DeleteItemsResponse)
+
+    counts["_total"] = sum(counts.values())
+    logger.info("schematic_ipc_clear_all_succeeded", **counts)
+    return counts
+
+
 __all__ = (
-    "SCH_IPC_OPT_IN_ENV",
+    "SCH_IPC_FORCE_ENV",
     "SCH_IPC_PERSISTENCE_HINT",
+    "SCH_IPC_VERIFY_ENV",
+    "SchematicIPCRequiredError",
     "build_bus_proto",
     "build_bus_wire_entry_proto",
     "build_global_label_proto",
@@ -715,10 +1178,16 @@ __all__ = (
     "build_junction_proto",
     "build_local_label_proto",
     "build_no_connect_proto",
+    "build_text_proto",
+    "build_textbox_proto",
     "build_wire_proto",
+    "check_ipc_gate",
     "reset_runtime_gate_cache",
+    "route_schematic_clear_all",
     "route_schematic_create",
-    "should_use_ipc_for_schematic_mutation",
+    "route_schematic_delete_by_reference",
+    "route_schematic_place_symbol",
+    "route_schematic_save",
 )
 
 
