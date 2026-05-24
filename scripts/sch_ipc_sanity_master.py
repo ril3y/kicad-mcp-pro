@@ -13,8 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "kicad_mcp" / "_master_proto"))
 
 import pynng  # noqa: E402
-from google.protobuf.any_pb2 import Any  # noqa: E402
-
 from common.commands.editor_commands_pb2 import (  # noqa: E402
     CreateItems,
     CreateItemsResponse,
@@ -23,15 +21,19 @@ from common.commands.editor_commands_pb2 import (  # noqa: E402
 )
 from common.envelope_pb2 import ApiRequest, ApiResponse  # noqa: E402
 from common.types.base_types_pb2 import DocumentType  # noqa: E402
+from google.protobuf.any_pb2 import Any  # noqa: E402
 from schematic.schematic_types_pb2 import GlobalLabel  # noqa: E402
-
 
 # Default Windows KiCad IPC socket path. KICAD_API_SOCKET env override is ignored
 # here — keep the script self-contained.
 SOCK = "ipc:///C:/Users/riley/AppData/Local/Temp/kicad/api.sock"
 
 
-def send(sock: pynng.Req0, command, response_cls):
+def send(  # noqa: ANN201
+    sock: pynng.Req0,
+    command,  # noqa: ANN001 -- proto Message; any protobuf type with .Pack works
+    response_cls,  # noqa: ANN001 -- proto Message class
+):
     env = ApiRequest()
     env.message.Pack(command)
     sock.send(env.SerializeToString())
@@ -39,7 +41,9 @@ def send(sock: pynng.Req0, command, response_cls):
     reply = ApiResponse()
     reply.ParseFromString(reply_bytes)
     if reply.status.status != 1:  # AS_OK
-        raise RuntimeError(f"API error status={reply.status.status} msg={reply.status.error_message}")
+        raise RuntimeError(
+            f"API error status={reply.status.status} msg={reply.status.error_message}"
+        )
     out = response_cls()
     reply.message.Unpack(out)
     return out
@@ -86,7 +90,10 @@ def main() -> int:
         print(f"     status={r.status.code} item_type={r.item.type_url}")
 
     print()
-    print("Look at eeschema — there should be a global label 'MASTER_OK' at (10mm, 10mm) WITH VISIBLE TEXT.")
+    print(
+        "Look at eeschema — there should be a global label 'MASTER_OK' "
+        "at (10mm, 10mm) WITH VISIBLE TEXT."
+    )
     return 0
 
 
