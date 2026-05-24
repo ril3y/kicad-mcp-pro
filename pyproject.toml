@@ -117,6 +117,11 @@ strict = true
 plugins = ["pydantic.mypy"]
 exclude = ["src/kicad_mcp/_master_proto/"]
 
+[[tool.mypy.overrides]]
+module = ["pymupdf", "pymupdf.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
