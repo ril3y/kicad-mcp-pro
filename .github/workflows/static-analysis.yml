@@ -42,6 +42,7 @@ jobs:
         run: >
           uv run vulture src tests whitelist.py --min-confidence 90
           --ignore-names stroke_width,stroke_type,page_number,file_path,preserve_format,unit_count,netclass_filter
+          --exclude src/kicad_mcp/_master_proto/
       - name: Radon complexity
         run: >
           uv run python scripts/static_analysis_gate.py radon
