@@ -1,3 +1,13 @@
+# pyright: reportPrivateUsage=false
+# pyright: reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false
+# pyright: reportUnknownParameterType=false
+# pyright: reportUnknownArgumentType=false
+# pyright: reportMissingParameterType=false
+# pyright: reportAttributeAccessIssue=false
+# pyright: reportReturnType=false
+# pyright: reportInvalidTypeForm=false
+# ruff: noqa: ANN001, ANN201
 """Regression tests for get_pin_positions y-flip behavior.
 
 Protects against the double-flip bug previously at

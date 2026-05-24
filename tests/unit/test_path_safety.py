@@ -1,3 +1,11 @@
+# pyright: reportPrivateUsage=false
+# pyright: reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false
+# pyright: reportUnknownParameterType=false
+# pyright: reportUnknownArgumentType=false
+# pyright: reportMissingParameterType=false
+# pyright: reportUnusedImport=false
+# ruff: noqa: ANN001, ANN201
 from __future__ import annotations
 
 from pathlib import Path
