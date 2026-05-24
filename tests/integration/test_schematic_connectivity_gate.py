@@ -58,6 +58,10 @@ def _inject_sheet_pin(top_file: Path, pin_name: str) -> None:
     top_file.write_text(updated, encoding="utf-8")
 
 
+@pytest.mark.skip(
+    reason="requires live eeschema IPC: cb86438 removed file-edit fallback for sch_add_*; "
+    "test gate for IPC-required path tracked as task #83",
+)
 @pytest.mark.anyio
 async def test_schematic_connectivity_gate_passes_for_connected_flat_net(
     sample_project: Path,
