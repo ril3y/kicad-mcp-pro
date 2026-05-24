@@ -474,22 +474,26 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
             return f"Schematic PDF export failed: {stderr or stdout or 'unknown error'}"
 
         try:
-            import pymupdf  # type: ignore[import-not-found]
+            import pymupdf
         except ImportError:
             return (
                 f"PDF exported to {pdf_path} but pymupdf is not installed; "
                 "run `pip install pymupdf` (or `uv add pymupdf`) in the kicad-mcp venv."
             )
 
+        # pymupdf is a third-party C-extension wrapper with no published type
+        # stubs; every call goes through Any. Suppress no-untyped-call here
+        # rather than ignoring per-line.
         try:
-            doc = pymupdf.open(str(pdf_path))
+            doc = pymupdf.open(str(pdf_path))  # type: ignore[no-untyped-call]
             if page < 1 or page > doc.page_count:
-                doc.close()
+                doc.close()  # type: ignore[no-untyped-call]
                 return f"Page {page} out of range (PDF has {doc.page_count} page(s))"
             zoom = dpi / 72.0  # PDF native is 72 dpi
-            pix = doc[page - 1].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-            pix.save(str(png_path))
-            doc.close()
+            matrix = pymupdf.Matrix(zoom, zoom)  # type: ignore[no-untyped-call]
+            pix = doc[page - 1].get_pixmap(matrix=matrix)
+            pix.save(str(png_path))  # type: ignore[no-untyped-call]
+            doc.close()  # type: ignore[no-untyped-call]
         except Exception as exc:  # noqa: BLE001
             return f"PNG rasterization failed: {exc}"
 

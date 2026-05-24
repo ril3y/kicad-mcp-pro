@@ -939,7 +939,7 @@ def route_schematic_save(
 
         kicad_factory = _factory
 
-    from google.protobuf.empty_pb2 import Empty
+    from google.protobuf.empty_pb2 import Empty  # type: ignore[import-untyped]
 
     from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
         GetOpenDocuments,
