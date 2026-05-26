@@ -22,10 +22,14 @@ from ..models.power_integrity import (
     ThermalViaInput,
     VoltageDropInput,
 )
+from ..utils.ampacity import (
+    ipc2221_current_capacity_a,
+    ipc2221_required_width_mm,
+)
 from ..utils.impedance import copper_thickness_mm, recommended_decoupling_distance_mm
 from ..utils.layers import resolve_layer
 from ..utils.pdn_mesh import PdnDecouplingCap, PdnLoad, PdnMesh
-from ..utils.units import _coord_nm, mm_to_mil, mm_to_nm, nm_to_mm
+from ..utils.units import _coord_nm, mm_to_nm, nm_to_mm
 
 _COPPER_RESISTIVITY_OHM_M = 1.724e-8
 _TEMPERATURE_COEFFICIENT = 0.0039
@@ -151,9 +155,12 @@ def _ipc_current_capacity_a(
     external: bool,
     max_temp_rise_c: float,
 ) -> float:
-    area_mil_sq = mm_to_mil(width_mm) * mm_to_mil(copper_thickness_mm_value)
-    k = 0.048 if external else 0.024
-    return float(k * (max_temp_rise_c**0.44) * (area_mil_sq**0.725))
+    return ipc2221_current_capacity_a(
+        width_mm,
+        copper_thickness_mm_value,
+        external=external,
+        max_temp_rise_c=max_temp_rise_c,
+    )
 
 
 def _required_width_mm(
@@ -163,9 +170,12 @@ def _required_width_mm(
     external: bool,
     max_temp_rise_c: float,
 ) -> float:
-    k = 0.048 if external else 0.024
-    area_mil_sq = (expected_current_a / (k * (max_temp_rise_c**0.44))) ** (1.0 / 0.725)
-    return float(area_mil_sq / mm_to_mil(copper_thickness_mm_value) * 0.0254)
+    return ipc2221_required_width_mm(
+        expected_current_a,
+        copper_thickness_mm_value,
+        external=external,
+        max_temp_rise_c=max_temp_rise_c,
+    )
 
 
 def _edge_cuts_bounds() -> tuple[float, float, float, float] | None:
