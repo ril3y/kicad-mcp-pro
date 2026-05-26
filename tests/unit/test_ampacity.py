@@ -107,12 +107,19 @@ def test_recommended_fuse_honors_safety_factor():
 
 def test_standard_fuse_ratings_are_monotonic_and_documented():
     """Pin the published fuse-rating list — changing this list is a
-    user-visible change to fuse recommendations and must be intentional."""
+    user-visible change to fuse recommendations and must be intentional.
+
+    These match the Littelfuse 257 (mini-ATO) and 297 (ATO) blade stocks
+    a user can buy off-the-shelf at an auto-parts store. Removing or
+    adding values here changes the rounding behavior of
+    ``recommended_fuse_rating_a``.
+    """
     assert STANDARD_FUSE_RATINGS_A == (
         0.5,
         1.0,
         2.0,
         3.0,
+        4.0,
         5.0,
         7.5,
         10.0,
@@ -120,10 +127,60 @@ def test_standard_fuse_ratings_are_monotonic_and_documented():
         20.0,
         25.0,
         30.0,
+        35.0,
+        40.0,
     )
     # And sorted ascending — `recommended_fuse_rating_a` depends on max()
     # picking the largest qualifying rating.
     assert list(STANDARD_FUSE_RATINGS_A) == sorted(STANDARD_FUSE_RATINGS_A)
+
+
+def test_recommended_fuse_picks_4a_in_the_added_gap():
+    """The 4 A rating was added per the domain audit — Littelfuse 257-004
+    is a real stocked part and matters for ~6 A traces that would
+    previously have rounded all the way down to 3 A."""
+    # 6.0 A trace × 0.7 = 4.2 A target → 4 A standard. Without the 4 A
+    # entry this would round to 3 A and overspec the fuse.
+    assert recommended_fuse_rating_a(6.0) == pytest.approx(4.0)
+
+
+def test_capacity_monotonic_in_width_and_temp_rise():
+    """Property check — wider traces and higher ΔT must both grow capacity.
+    Cheaper than asserting exact numbers; catches a sign-flip or exponent
+    bug that exact-value tests might miss if the bad value happens to
+    land near our pinned reference."""
+    cu = copper_oz_to_thickness_mm(1.0)
+    widths = [0.2, 0.5, 1.0, 2.0]
+    capacities = [
+        ipc2221_current_capacity_a(w, cu, external=True, max_temp_rise_c=20.0) for w in widths
+    ]
+    assert capacities == sorted(capacities), capacities
+
+    deltas = [10.0, 20.0, 30.0, 60.0]
+    delta_caps = [
+        ipc2221_current_capacity_a(1.0, cu, external=True, max_temp_rise_c=dt) for dt in deltas
+    ]
+    assert delta_caps == sorted(delta_caps), delta_caps
+
+
+def test_recommended_fuse_safety_factor_one_picks_full_capacity():
+    """``safety_factor=1.0`` means 'fuse can match trace capacity exactly'.
+    Confirm the rounding picks the largest rating ≤ capacity, not the
+    next-lower one. Caught a subtle off-by-one in the original draft."""
+    # 5.0 A trace × 1.0 = 5.0 A target → exactly the 5.0 A standard rating.
+    assert recommended_fuse_rating_a(5.0, safety_factor=1.0) == pytest.approx(5.0)
+    # 4.99 A trace × 1.0 = 4.99 A target → rounds down to 4.0 A.
+    assert recommended_fuse_rating_a(4.99, safety_factor=1.0) == pytest.approx(4.0)
+
+
+def test_required_width_inverts_internal_capacity_too():
+    """Round-trip property holds for the internal-layer branch as well —
+    the original test only covered external."""
+    cu = copper_oz_to_thickness_mm(1.0)
+    width = 1.5
+    capacity = ipc2221_current_capacity_a(width, cu, external=False, max_temp_rise_c=30.0)
+    recovered = ipc2221_required_width_mm(capacity, cu, external=False, max_temp_rise_c=30.0)
+    assert recovered == pytest.approx(width, rel=1e-6)
 
 
 def test_copper_oz_to_thickness_mm_matches_classic_constant():

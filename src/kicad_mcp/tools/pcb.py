@@ -73,10 +73,7 @@ from ..utils.ampacity import (
     ipc2221_current_capacity_a,
     recommended_fuse_rating_a,
 )
-from ..utils.board_tracks import (  # noqa: F401  (TrackSegment re-exported for tests)
-    TrackSegment,
-    segments_for_net,
-)
+from ..utils.board_tracks import TrackSegment, segments_for_net
 from ..utils.cache import clear_ttl_cache, ttl_cache
 from ..utils.impedance import TraceType, copper_thickness_mm, trace_impedance
 from ..utils.layers import CANONICAL_LAYER_NAMES, resolve_layer, resolve_layer_name
@@ -2497,7 +2494,18 @@ def register(mcp: FastMCP) -> None:
         Reads the configured ``.kicad_pcb`` directly — no live IPC. Reports
         capacity at four standard ΔT thresholds (10/20/30/60 °C) plus a
         recommended automotive blade-fuse size (70 % of the ΔT 20 °C limit,
-        rounded down to the next stocked rating).
+        rounded down to the next stocked ATO / mini-ATO rating).
+
+        Scope notes:
+        - Uses IPC-2221 §6.2 — the conservative chart-derived fit. IPC-2152
+          is typically 30-50 % more permissive (it accounts for adjacent
+          copper and thermal mass). For dense boards consider that derate.
+        - Inner layers default to 1 oz copper. Many fabs run 0.5 oz inner
+          on 4+ layer stackups; override ``copper_weight_oz`` accordingly.
+          The tool does not yet parse the board's (stackup) block.
+        - Vias are excluded from the routed-length sum. For nets that
+          change layer mid-route this slightly understates total length
+          (vias add negligible series resistance, so capacity is unaffected).
         """
         pcb_path = _get_pcb_file_for_sync()
         content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))

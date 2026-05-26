@@ -216,6 +216,84 @@ def test_pcb_check_trace_ampacity_reports_no_fuse_for_too_narrow_trace(
     assert "trace is too narrow for any standard" in result
 
 
+def test_pcb_check_trace_ampacity_honors_custom_max_temp_rise_c(
+    sample_project: Path,
+):
+    """The ``max_temp_rise_c`` parameter MUST change the load-check threshold
+    — otherwise the parameter is decorative. At ΔT 60 °C a 1.0 mm × 1 oz
+    external trace carries ~5.5 A, so a 4 A load that FAILs at ΔT 20 °C
+    must PASS at ΔT 60 °C."""
+    _write_board(
+        sample_project,
+        _segment((0.0, 0.0), (10.0, 0.0), 1.0, "F.Cu", "PWR"),
+    )
+    tools = _make_registered_pcb_tools()
+    fail_at_20 = tools["pcb_check_trace_ampacity"](  # type: ignore[operator]
+        "PWR", 4.0, max_temp_rise_c=20.0
+    )
+    assert "FAIL" in fail_at_20
+    pass_at_60 = tools["pcb_check_trace_ampacity"](  # type: ignore[operator]
+        "PWR", 4.0, max_temp_rise_c=60.0
+    )
+    assert "OK" in pass_at_60 and "FAIL" not in pass_at_60
+
+
+def test_pcb_check_trace_ampacity_honors_copper_weight_oz(sample_project: Path):
+    """Doubling copper weight from 1 oz to 2 oz roughly doubles capacity at
+    fixed width / ΔT (technically × 2^0.725 ≈ 1.65 — the area exponent in
+    IPC-2221). So a 4 A load that FAILs at 1 oz on a 0.5 mm trace must
+    move closer to OK on the same trace at 2 oz copper. We assert the
+    reported capacity DIFFERS — that's the parameter's whole job."""
+    _write_board(
+        sample_project,
+        _segment((0.0, 0.0), (10.0, 0.0), 0.5, "F.Cu", "PWR"),
+    )
+    tools = _make_registered_pcb_tools()
+    one_oz = tools["pcb_check_trace_ampacity"]("PWR", 0.0, 20.0, 1.0)  # type: ignore[operator]
+    two_oz = tools["pcb_check_trace_ampacity"]("PWR", 0.0, 20.0, 2.0)  # type: ignore[operator]
+    # 1 oz ΔT 20 C capacity for 0.5 mm = ~1.96 A; 2 oz ≈ 3.24 A.
+    assert "ΔT 20 C: 1.95 A" in one_oz or "ΔT 20 C: 1.96 A" in one_oz
+    assert "ΔT 20 C: 3.23 A" in two_oz or "ΔT 20 C: 3.24 A" in two_oz
+
+
+def test_pcb_check_trace_ampacity_load_check_passes_at_exact_capacity(
+    sample_project: Path,
+):
+    """Boundary: ``expected_current_a == chosen_capacity_a`` should be OK
+    (the tool uses ``<=``, not ``<``). Documenting the boundary prevents a
+    future refactor from silently making the comparison strict."""
+    _write_board(
+        sample_project,
+        _segment((0.0, 0.0), (10.0, 0.0), 1.0, "F.Cu", "PWR"),
+    )
+    tools = _make_registered_pcb_tools()
+    # 1.0 mm × 1 oz × external × ΔT 20°C ≈ 3.23 A. Use slightly under to
+    # avoid floating-point boundary fragility.
+    result: str = tools["pcb_check_trace_ampacity"]("PWR", 3.22)  # type: ignore[operator]
+    assert "OK" in result and "FAIL" not in result
+
+
+def test_pcb_check_trace_ampacity_case_insensitive_lookup_finds_net(
+    sample_project: Path,
+):
+    """The ``pcb_get_net_traces`` tool advertises ``case_sensitive`` but the
+    ampacity tool does not. Confirm that ``pcb_get_net_traces`` actually
+    finds a mixed-case net when given the lowercase form with the flag set.
+    The ampacity tool is intentionally case-sensitive (net names are)."""
+    _write_board(
+        sample_project,
+        _segment((0.0, 0.0), (10.0, 0.0), 1.0, "F.Cu", "MixedCaseNet"),
+    )
+    tools = _make_registered_pcb_tools()
+    found = tools["pcb_get_net_traces"](  # type: ignore[operator]
+        "mixedcasenet", case_sensitive=False
+    )
+    assert "Net 'MixedCaseNet' tracks" in found
+
+    not_found = tools["pcb_get_net_traces"]("mixedcasenet")  # type: ignore[operator]
+    assert "No routed track segments" in not_found
+
+
 def test_segments_for_net_finds_the_synthetic_fixture(board_with_48v: Path):
     """Sanity check the parser helper against the same fixture so a
     parser regression doesn't masquerade as a tool-format failure."""

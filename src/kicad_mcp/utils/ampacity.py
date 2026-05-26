@@ -24,14 +24,16 @@ from .units import mm_to_mil
 _EXTERNAL_K = 0.048
 _INTERNAL_K = 0.024
 
-# Standard automotive blade-fuse ratings. Used for `recommended_fuse_rating_a`
-# to round down to the next-lower stocked size. Larger values can be added
-# later if needed.
+# Standard ATO / mini-ATO blade-fuse ratings (Littelfuse 257 / 297 series).
+# Used by `recommended_fuse_rating_a` to round down to the next-lower
+# stocked size, so the recommendation maps to something a user can
+# actually buy at an auto-parts store.
 STANDARD_FUSE_RATINGS_A: tuple[float, ...] = (
     0.5,
     1.0,
     2.0,
     3.0,
+    4.0,
     5.0,
     7.5,
     10.0,
@@ -39,6 +41,8 @@ STANDARD_FUSE_RATINGS_A: tuple[float, ...] = (
     20.0,
     25.0,
     30.0,
+    35.0,
+    40.0,
 )
 
 
@@ -88,11 +92,21 @@ def recommended_fuse_rating_a(
     blade-fuse rating.
 
     ``safety_factor`` is the fraction of trace capacity the fuse must blow
-    below. 0.7 is the rule of thumb for automotive harnesses — a 10 A trace
-    paired with a 7 A fuse.
+    below. The 0.7 default is the **automotive-harness convention** (a 10 A
+    trace paired with a 7 A fuse). It's not IPC-2221 or NEC — those use 0.8
+    or 0.5 for different scenarios. Tune ``safety_factor`` if you need a
+    different derate.
 
     Returns ``0.0`` if no standard rating fits (trace too narrow for any
     common fuse).
+
+    Note for motor-controller feeds: a fuse sized this way protects the
+    *trace* against a steady fault, not the *controller* against inrush.
+    Kelly / Curtis controllers spike 10-50 A for tens of ms on cap pre-
+    charge — a 70%-of-steady-state fuse will nuisance-trip at every
+    key-on. Use this output as a floor for trace protection and do a
+    separate I²t check against the controller's inrush envelope before
+    sizing the actual main fuse.
     """
     target = trace_capacity_a * safety_factor
     eligible = [rating for rating in STANDARD_FUSE_RATINGS_A if rating <= target]
