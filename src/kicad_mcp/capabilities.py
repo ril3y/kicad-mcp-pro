@@ -172,6 +172,20 @@ _register_many(
     verification_level="verified",
 )
 
+# Headless trace inspection / IPC-2221 ampacity check — both parse
+# the .kicad_pcb file directly so they need no KiCad process. Useful
+# from CI, scripts, and review sessions where pcbnew isn't running.
+_register_many(
+    [
+        "pcb_get_net_traces",
+        "pcb_check_trace_ampacity",
+    ],
+    profiles=_PCB_PROFILES,
+    tier=AccessTier.READ,
+    runtime=RuntimeRequirement.NONE,
+    verification_level="verified",
+)
+
 _register_many(
     [
         "pcb_add_footprint",
