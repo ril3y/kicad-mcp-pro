@@ -121,18 +121,22 @@ def _coerce_grid_value_to_mm(value: object) -> float | None:
     return round(numeric / _MILS_PER_MM, 6)
 
 
-def read_project_grid_mm(project_file: Path | None) -> float:
+def read_project_grid_mm(
+    project_file: Path | None,
+    default: float = DEFAULT_SCHEMATIC_GRID_MM,
+) -> float:
     """Return the schematic editing grid (mm) configured in ``<project>.kicad_pro``.
 
     Looks at ``schematic.connection_grid_size`` first (the only
     schematic-level grid field KiCad 9.0 persists in the project file).
-    Falls back to ``DEFAULT_SCHEMATIC_GRID_MM`` (2.54 mm) when the file
-    cannot be read or the field is missing/invalid, and logs the
-    fallback path at DEBUG level so we can audit downstream surprises.
+    Falls back to ``default`` (``DEFAULT_SCHEMATIC_GRID_MM``, 2.54 mm, unless
+    overridden) when the file cannot be read or the field is missing/invalid,
+    and logs the fallback path at DEBUG level so we can audit downstream
+    surprises.
     """
     if project_file is None:
         logger.debug("hardening_project_grid_no_project_file_fallback")
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     try:
         text = project_file.read_text(encoding="utf-8")
     except OSError as exc:
@@ -141,7 +145,7 @@ def read_project_grid_mm(project_file: Path | None) -> float:
             project_file=str(project_file),
             error=str(exc),
         )
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -150,13 +154,13 @@ def read_project_grid_mm(project_file: Path | None) -> float:
             project_file=str(project_file),
             error=str(exc),
         )
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     if not isinstance(payload, dict):
         logger.debug(
             "hardening_project_grid_unexpected_root",
             project_file=str(project_file),
         )
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     payload_typed = cast(dict[str, object], payload)
     schematic_block_raw = payload_typed.get("schematic")
     if not isinstance(schematic_block_raw, dict):
@@ -164,7 +168,7 @@ def read_project_grid_mm(project_file: Path | None) -> float:
             "hardening_project_grid_missing_schematic_block",
             project_file=str(project_file),
         )
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     schematic_block = cast(dict[str, object], schematic_block_raw)
     raw = schematic_block.get("connection_grid_size")
     converted = _coerce_grid_value_to_mm(raw)
@@ -174,7 +178,7 @@ def read_project_grid_mm(project_file: Path | None) -> float:
             project_file=str(project_file),
             raw=raw,
         )
-        return DEFAULT_SCHEMATIC_GRID_MM
+        return default
     return converted
 
 

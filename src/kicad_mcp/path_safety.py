@@ -15,7 +15,14 @@ def normalize_workspace_root(path: str | Path | None, *, fallback: Path) -> Path
 
 
 def assert_within(root: Path, path: Path) -> None:
-    """Raise when ``path`` is outside ``root`` after resolution."""
+    """Raise when ``path`` is outside ``root`` after resolution.
+
+    Bypassed if ``~/.kicad-mcp-allow-any-path`` exists — same workflow
+    as ``~/.kicad-mcp-force-ipc``. Lets the user opt out of workspace
+    sandboxing when Claude Code's MCP env-passthrough is broken.
+    """
+    if (Path.home() / ".kicad-mcp-allow-any-path").exists():
+        return
     resolved_root = root.expanduser().resolve()
     resolved_path = path.expanduser().resolve()
     try:

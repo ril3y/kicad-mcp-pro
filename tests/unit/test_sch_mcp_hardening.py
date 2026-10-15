@@ -117,7 +117,7 @@ def test_snap_to_grid_warning_text_references_incident() -> None:
 
 
 def test_sch_add_wire_response_warns_when_snap_disabled(
-    sample_project: Path, mock_kicad: object
+    sample_project: Path, mock_kicad: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Calling ``sch_add_wire`` with ``snap_to_grid=False`` must surface
     a structured warning field — the escape hatch stays open but it is
@@ -126,6 +126,14 @@ def test_sch_add_wire_response_warns_when_snap_disabled(
 
     from kicad_mcp.server import build_server
     from tests.conftest import call_tool_text
+
+    sent: list[object] = []
+
+    def fake_create(protos: list[object]) -> str:
+        sent.extend(protos)
+        return "Created 1 item via IPC."
+
+    monkeypatch.setattr("kicad_mcp.tools.schematic.route_schematic_create", fake_create)
 
     server = build_server("schematic")
     result = asyncio.run(
@@ -146,13 +154,13 @@ def test_sch_add_wire_response_warns_when_snap_disabled(
     payload = json.loads(result)
     assert "warning" in payload
     assert "2026-05-19" in payload["warning"]
-    # Off-grid endpoints are still recorded — refuse-vs-warn distinction.
-    schematic = (sample_project / "demo.kicad_sch").read_text(encoding="utf-8")
-    assert "(pts (xy 1.1 2.2) (xy 3.3 4.4))" in schematic
+    # Off-grid wire is still sent — refuse-vs-warn distinction.
+    assert len(sent) == 1
+    assert payload["result"] == "Created 1 item via IPC."
 
 
 def test_sch_add_wire_response_is_plain_when_snap_enabled(
-    sample_project: Path, mock_kicad: object
+    sample_project: Path, mock_kicad: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``snap_to_grid=True`` (the default) keeps the legacy plain-text
     response so existing automation continues to work unchanged."""
@@ -160,6 +168,11 @@ def test_sch_add_wire_response_is_plain_when_snap_enabled(
 
     from kicad_mcp.server import build_server
     from tests.conftest import call_tool_text
+
+    monkeypatch.setattr(
+        "kicad_mcp.tools.schematic.route_schematic_create",
+        lambda _protos: "Created 1 item via IPC.",
+    )
 
     server = build_server("schematic")
     result = asyncio.run(
@@ -173,6 +186,31 @@ def test_sch_add_wire_response_is_plain_when_snap_enabled(
     # Plain text — must not be JSON-wrapped.
     with pytest.raises(json.JSONDecodeError):
         json.loads(result)
+
+
+def test_wire_grid_falls_back_to_fine_grid_without_project_setting(
+    sample_project: Path,
+) -> None:
+    """With no ``connection_grid_size`` in the project, wires snap to the
+    1.27 mm fine grid so endpoints can land on passive pin tips."""
+    from kicad_mcp.tools.schematic import _snap_line
+    from kicad_mcp.utils.cache import clear_ttl_cache
+
+    clear_ttl_cache()
+    assert _snap_line(57.2, 50.9, 60.0, 50.9, True) == (57.15, 50.8, 59.69, 50.8)
+
+
+def test_wire_grid_honours_project_connection_grid(sample_project: Path) -> None:
+    """An explicit project ``connection_grid_size`` wins over the fine-grid
+    default, keeping wire endpoints reachable from the eeschema edit grid."""
+    from kicad_mcp.tools.schematic import _snap_line
+    from kicad_mcp.utils.cache import clear_ttl_cache
+
+    (sample_project / "demo.kicad_pro").write_text(
+        json.dumps({"schematic": {"connection_grid_size": 100.0}}), encoding="utf-8"
+    )
+    clear_ttl_cache()
+    assert _snap_line(57.2, 50.9, 60.0, 50.9, True) == (58.42, 50.8, 60.96, 50.8)
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +264,8 @@ def test_raise_if_locked_no_op_when_no_locks(tmp_path: Path) -> None:
     hardening.raise_if_locked(sch, None)
 
 
-def test_sch_add_wire_refuses_when_lock_present(sample_project: Path, mock_kicad: object) -> None:
-    """End-to-end: dropping a lock file before calling ``sch_add_wire``
+def test_sch_file_write_refuses_when_lock_present(sample_project: Path, mock_kicad: object) -> None:
+    """End-to-end: dropping a lock file before calling ``sch_set_sheet_size``
     yields a structured refusal error and leaves the schematic untouched."""
     import asyncio
 
@@ -242,8 +280,8 @@ def test_sch_add_wire_refuses_when_lock_present(sample_project: Path, mock_kicad
     result = asyncio.run(
         call_tool_text(
             server,
-            "sch_add_wire",
-            {"x1_mm": 5.08, "y1_mm": 5.08, "x2_mm": 10.16, "y2_mm": 5.08},
+            "sch_set_sheet_size",
+            {"paper": "A3"},
         )
     )
 
@@ -295,10 +333,10 @@ def test_create_backup_sanitises_tool_name(tmp_path: Path) -> None:
     assert "sch____escape" in backup.name
 
 
-def test_sch_add_wire_writes_backup_before_mutation(
+def test_sch_file_write_creates_backup_before_mutation(
     sample_project: Path, mock_kicad: object
 ) -> None:
-    """A successful ``sch_add_wire`` call leaves a backup of the
+    """A successful ``sch_set_sheet_size`` call leaves a backup of the
     pre-mutation schematic next to the live file."""
     import asyncio
 
@@ -312,12 +350,12 @@ def test_sch_add_wire_writes_backup_before_mutation(
     asyncio.run(
         call_tool_text(
             server,
-            "sch_add_wire",
-            {"x1_mm": 5.08, "y1_mm": 5.08, "x2_mm": 10.16, "y2_mm": 5.08},
+            "sch_set_sheet_size",
+            {"paper": "A3"},
         )
     )
 
-    backups = sorted(sample_project.glob("demo.kicad_sch.bak-pre-sch_add_wire-*"))
+    backups = sorted(sample_project.glob("demo.kicad_sch.bak-pre-sch_set_sheet_size-*"))
     assert len(backups) >= 1
     # Backup is the pre-mutation snapshot.
     assert backups[0].read_text(encoding="utf-8") == original
@@ -366,8 +404,8 @@ def test_validation_failure_restores_from_backup(
     result = asyncio.run(
         call_tool_text(
             server,
-            "sch_add_wire",
-            {"x1_mm": 5.08, "y1_mm": 5.08, "x2_mm": 10.16, "y2_mm": 5.08},
+            "sch_set_sheet_size",
+            {"paper": "A3"},
         )
     )
 
@@ -534,27 +572,6 @@ def test_find_lock_files_deduplicates_targets(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
-        (
-            "sch_add_symbol",
-            {
-                "library": "Device",
-                "symbol_name": "R",
-                "x_mm": 50.8,
-                "y_mm": 50.8,
-                "reference": "R1",
-                "value": "10k",
-                "footprint": "Resistor_SMD:R_0805",
-                "rotation": 0,
-            },
-        ),
-        ("sch_add_wire", {"x1_mm": 5.08, "y1_mm": 5.08, "x2_mm": 10.16, "y2_mm": 5.08}),
-        ("sch_add_label", {"name": "N", "x_mm": 5.08, "y_mm": 5.08}),
-        ("sch_add_bus", {"x1_mm": 5.08, "y1_mm": 5.08, "x2_mm": 10.16, "y2_mm": 5.08}),
-        ("sch_add_bus_wire_entry", {"x_mm": 5.08, "y_mm": 5.08, "direction": "up_right"}),
-        ("sch_add_no_connect", {"x_mm": 5.08, "y_mm": 5.08}),
-        ("sch_add_global_label", {"text": "G", "x_mm": 5.08, "y_mm": 5.08}),
-        ("sch_add_hierarchical_label", {"text": "H", "x_mm": 5.08, "y_mm": 5.08}),
-        ("sch_add_jumper", {"x_mm": 5.08, "y_mm": 5.08}),
         ("sch_annotate", {}),
         ("sch_set_sheet_size", {"paper": "A3"}),
         (
@@ -574,15 +591,17 @@ def test_find_lock_files_deduplicates_targets(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_every_sch_add_tool_honours_lock_refusal(
+def test_file_writing_sch_tools_honour_lock_refusal(
     sample_project: Path,
     mock_kicad: object,
     tool_name: str,
     arguments: dict[str, object],
 ) -> None:
-    """Each sch_add_* tool refuses to mutate when the eeschema lock file
-    is present.  Exercises the HardeningError -> JSON response code
-    path on every mutating tool surface."""
+    """Each file-writing sch_* tool refuses to mutate when the eeschema
+    lock file is present.  (The sch_add_* placement tools now go through
+    eeschema IPC and never touch the file, so they are not listed.)
+    Exercises the HardeningError -> JSON response code path on every
+    file-writing tool surface."""
     import asyncio
 
     from kicad_mcp.server import build_server
@@ -668,6 +687,8 @@ def test_more_sch_tools_honour_lock_refusal(
                 "BACKUP_SOURCE_MISSING",
             }
     except json.JSONDecodeError:
+        # Plain-text early return (e.g. "not found") — nothing to check
+        # beyond the unchanged-file assertion below.
         pass
     assert sch_file.read_text(encoding="utf-8") == original
 
