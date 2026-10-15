@@ -1,5 +1,7 @@
 """Schematic tools with parser-based reads and transactional writes."""
 
+# pyright: reportUnknownMemberType=false
+
 from __future__ import annotations
 
 import json
@@ -19,6 +21,20 @@ from mcp.server.fastmcp import FastMCP
 from ..config import get_config
 from ..connection import KiCadConnectionError, get_kicad
 from ..discovery import is_numbered_duplicate_kicad_file
+from ..ipc.runtime_gate import (
+    build_bus_proto,
+    build_bus_wire_entry_proto,
+    build_global_label_proto,
+    build_hierarchical_label_proto,
+    build_junction_proto,
+    build_local_label_proto,
+    build_no_connect_proto,
+    build_text_proto,
+    build_textbox_proto,
+    build_wire_proto,
+    route_schematic_create,
+    route_schematic_place_symbol,
+)
 from ..models.schematic import (
     AddBusInput,
     AddBusWireEntryInput,
@@ -50,7 +66,11 @@ from ..utils.sexpr import (
 )
 from .metadata import headless_compatible
 
-SCHEMATIC_GRID_MM = 2.54
+SCHEMATIC_GRID_MM = 2.54  # symbol placement grid (KiCad coarse grid, 100 mil)
+WIRE_GRID_MM = 1.27  # wire/pin endpoint grid (KiCad fine grid, 50 mil); all
+# passive pin endpoints land on this grid because pin offsets are 3.81mm
+# (= 1.5 × 2.54 = 3 × 1.27), so a 2.54mm wire snap would round wires OFF
+# the pin coords.
 SNAP_TOLERANCE_MM = 1e-6
 AUTO_LAYOUT_ORIGIN_X_MM = 50.8
 AUTO_LAYOUT_ORIGIN_Y_MM = 50.8
@@ -620,6 +640,12 @@ def _snap_schematic_coord(value: float) -> float:
     return 0.0 if abs(snapped) < SNAP_TOLERANCE_MM else snapped
 
 
+def _snap_wire_coord(value: float) -> float:
+    """Snap to the 1.27mm fine grid (where pin endpoints live)."""
+    snapped = round(round(value / WIRE_GRID_MM) * WIRE_GRID_MM, 4)
+    return 0.0 if abs(snapped) < SNAP_TOLERANCE_MM else snapped
+
+
 def _snap_point(x: float, y: float, enabled: bool) -> tuple[float, float]:
     if not enabled:
         return x, y
@@ -635,11 +661,14 @@ def _snap_line(
 ) -> tuple[float, float, float, float]:
     if not enabled:
         return x1, y1, x2, y2
+    # Wires snap to the fine pin grid (1.27mm) so endpoints can land on
+    # passive pin coords (which are 3.81mm = 3 × 1.27 from the 2.54-grid
+    # symbol centers, i.e. always on the 1.27 grid).
     return (
-        _snap_schematic_coord(x1),
-        _snap_schematic_coord(y1),
-        _snap_schematic_coord(x2),
-        _snap_schematic_coord(y2),
+        _snap_wire_coord(x1),
+        _snap_wire_coord(y1),
+        _snap_wire_coord(x2),
+        _snap_wire_coord(y2),
     )
 
 
@@ -1720,6 +1749,61 @@ def run_auto_add_missing_junctions() -> str:
     return f"Inserted {inserted} missing junction(s)."
 
 
+def _expand_kicad_sym_uri(uri: str, project_dir: Path | None) -> str:
+    """Expand KiCad-style ``${VAR}`` placeholders in a ``sym-lib-table`` URI.
+
+    Mirrors ``tools/pcb._expand_kicad_lib_uri`` so the symbol side honors the
+    same precedence the GUI uses (see ``kicad/include/env_paths.h``):
+      1. ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` -> ``project_dir``.
+      2. Process environment (``os.environ``) — lets a CI runner override
+         user-defined vars without editing config files.
+      3. User-defined vars from ``kicad_common.json::environment.vars``
+         (KiCad ``Preferences > Configure Paths``). These are the normal
+         source for things like ``${EASYEDA2KICAD}`` / ``${MY_LIBS}``;
+         KiCad only injects them when the GUI is running, so the MCP
+         server reads them out of the config file directly.
+
+    Unknown placeholders are left intact so the caller's ``exists()`` probe
+    fails loudly rather than dispatching to a partially-substituted path.
+    """
+    import os
+
+    from ..discovery import find_kicad_user_env_vars
+
+    if project_dir is not None:
+        uri = uri.replace("${KIPRJMOD}", str(project_dir))
+        uri = uri.replace("${KICAD_PROJECT_DIR}", str(project_dir))
+    for key, value in os.environ.items():
+        token = "${" + key + "}"
+        if token in uri:
+            uri = uri.replace(token, value)
+    for key, value in find_kicad_user_env_vars().items():
+        uri = uri.replace("${" + key + "}", value)
+    return uri
+
+
+def _lookup_sym_lib_table_uri(library: str, project_dir: Path) -> str | None:
+    """Return the raw ``uri`` field for ``library`` in the project-local
+    ``sym-lib-table``, or ``None`` if no matching entry exists. The URI is
+    returned un-expanded so callers can decide whether to substitute
+    project / OS / KiCad user env vars."""
+    sym_table = project_dir / "sym-lib-table"
+    if not sym_table.exists():
+        return None
+    try:
+        table_text = sym_table.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    entry_pattern = re.compile(
+        r'\(name\s+"?'
+        + re.escape(library)
+        + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
+        re.IGNORECASE,
+    )
+    match = entry_pattern.search(table_text)
+    return match.group(1) if match else None
+
+
 def _symbol_file(library: str) -> Path:
     """Resolve a symbol library name to a ``.kicad_sym`` path.
 
@@ -1728,44 +1812,106 @@ def _symbol_file(library: str) -> Path:
     libraries) resolve in headless flows that don't go through eeschema's
     GUI library resolver. The schematic-side counterpart of PR #9's
     ``_footprint_file`` fix in ``tools/pcb.py`` — same S-expression
-    format, same ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` substitution,
-    same fall-through-to-global semantics. Without this fix, an attempt
-    to spawn eeschema headlessly on a project that uses easyeda2kicad-
-    imported symbols would either crash on the missing library or block
-    on the GUI's "library not found" modal.
+    format, same fall-through-to-global semantics.
+
+    URI expansion now matches the PCB side: ``${KIPRJMOD}`` /
+    ``${KICAD_PROJECT_DIR}`` resolve to ``project_dir``, then OS env, then
+    user-defined vars from ``kicad_common.json::environment.vars`` so
+    URIs like ``${EASYEDA2KICAD}/easyeda2kicad.kicad_sym`` resolve
+    headlessly. Without this, ``sch_get_pin_positions`` /
+    ``sch_add_symbol`` fail on projects that use easyeda2kicad-imported
+    libraries even though the GUI resolves them fine.
     """
     cfg = get_config()
     if cfg.project_dir is not None:
-        sym_table = cfg.project_dir / "sym-lib-table"
-        if sym_table.exists():
-            try:
-                table_text = sym_table.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                table_text = ""
-            entry_pattern = re.compile(
-                r'\(name\s+"?'
-                + re.escape(library)
-                + r'"?\s*\)\s*\(type\s+"?[^")]+"?\s*\)\s*\(uri\s+"([^"]+)"\s*\)',
-                re.IGNORECASE,
-            )
-            match = entry_pattern.search(table_text)
-            if match:
-                uri = match.group(1)
-                uri = uri.replace("${KIPRJMOD}", str(cfg.project_dir))
-                uri = uri.replace("${KICAD_PROJECT_DIR}", str(cfg.project_dir))
-                # ``sym-lib-table`` URIs are usually full paths to a
-                # ``.kicad_sym`` file (not directories like fp-lib-table).
-                # Try the URI itself first, then fall back to URI/library.kicad_sym
-                # for compatibility with directory-style entries.
-                candidate = Path(uri)
-                if candidate.exists() and candidate.suffix == ".kicad_sym":
-                    return candidate
-                candidate = candidate / f"{library}.kicad_sym"
-                if candidate.exists():
-                    return candidate
+        raw_uri = _lookup_sym_lib_table_uri(library, cfg.project_dir)
+        if raw_uri is not None:
+            uri = _expand_kicad_sym_uri(raw_uri, cfg.project_dir)
+            # ``sym-lib-table`` URIs are usually full paths to a
+            # ``.kicad_sym`` file (not directories like fp-lib-table).
+            # Try the URI itself first, then fall back to URI/library.kicad_sym
+            # for compatibility with directory-style entries.
+            candidate = Path(uri)
+            if candidate.exists() and candidate.suffix == ".kicad_sym":
+                return candidate
+            directory_candidate = candidate / f"{library}.kicad_sym"
+            if directory_candidate.exists():
+                return directory_candidate
     if cfg.symbol_library_dir is None or not cfg.symbol_library_dir.exists():
         raise FileNotFoundError("No KiCad symbol library directory is configured.")
     return cfg.symbol_library_dir / f"{library}.kicad_sym"
+
+
+def _load_embedded_lib_symbol_blocks(library: str, symbol_name: str) -> list[str]:
+    """Look for ``library:symbol_name`` inside the active schematic's
+    ``(lib_symbols ...)`` cache and return the matching symbol blocks.
+
+    KiCad embeds a copy of every used symbol inside each schematic's
+    ``lib_symbols`` section, prefixed with ``<library_name>:``. This is the
+    only authoritative source when the project's ``sym-lib-table`` doesn't
+    list the library — common after a project rename or when
+    easyeda2kicad-imported symbols were placed under one library name
+    (``easyeda:``) but the table was later renamed (``easyeda2kicad``).
+    Falling back here lets headless flows resolve pin positions the same
+    way the eeschema GUI does.
+
+    Returns an empty list when no schematic is configured, no matching
+    block is present, or the cache lookup itself raises. Quiet on
+    failure because this is a fallback path; callers handle empty
+    results by surfacing a clean "symbol not found" message.
+    """
+    cfg = get_config()
+    sch_file = cfg.sch_file
+    if sch_file is None or not sch_file.exists():
+        return []
+    try:
+        sch_text = sch_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    lib_symbols_marker = sch_text.find("(lib_symbols")
+    if lib_symbols_marker < 0:
+        return []
+    lib_symbols_block, _ = _extract_block(sch_text, lib_symbols_marker)
+    if not lib_symbols_block:
+        return []
+    embedded_name = f"{library}:{symbol_name}"
+    blocks = _collect_symbol_blocks(lib_symbols_block, embedded_name)
+    if not blocks:
+        return []
+    # The embedded block carries the prefixed name (``easyeda:G2R-2-DC12V``)
+    # which trips up downstream parsers expecting the bare symbol name
+    # (used in ``_extract_child_symbol_blocks`` prefix matching for units).
+    # Rewrite just the outermost header back to the bare form so the same
+    # pin / unit extractors that operate on library-file blocks work here.
+    normalized = list(blocks)
+    normalized[-1] = normalized[-1].replace(
+        f'(symbol "{embedded_name}"',
+        f'(symbol "{symbol_name}"',
+        1,
+    )
+    return normalized
+
+
+def _load_symbol_blocks(library: str, symbol_name: str) -> list[str]:
+    """Load symbol definition blocks for ``library:symbol_name`` from the
+    sym-lib-table-resolved file, falling back to the active schematic's
+    embedded ``lib_symbols`` cache.
+
+    Centralizes the resolution flow used by ``get_pin_positions``,
+    ``get_pin_alias_positions``, ``get_symbol_available_units``, and
+    ``load_lib_symbol`` so they all benefit from the embedded fallback
+    in one place.
+    """
+    try:
+        sym_file = _symbol_file(library)
+    except FileNotFoundError:
+        sym_file = None
+    if sym_file is not None and sym_file.exists():
+        content = sym_file.read_text(encoding="utf-8", errors="ignore")
+        blocks = _collect_symbol_blocks(content, symbol_name)
+        if blocks:
+            return blocks
+    return _load_embedded_lib_symbol_blocks(library, symbol_name)
 
 
 def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
@@ -1777,13 +1923,15 @@ def rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
 
 
 def load_lib_symbol(library: str, symbol_name: str) -> str | None:
-    """Load a symbol definition from a KiCad symbol library."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return None
+    """Load a symbol definition from a KiCad symbol library.
 
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    Resolution is delegated to ``_load_symbol_blocks`` which consults the
+    project ``sym-lib-table`` first and then falls back to the active
+    schematic's embedded ``lib_symbols`` cache — important for projects
+    whose schematics reference a library name (``easyeda:``) that no
+    longer exists in the sym-lib-table (``easyeda2kicad``).
+    """
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return None
 
@@ -1944,7 +2092,9 @@ def _pin_alias_positions(
     aliases: dict[str, tuple[float, float]] = {}
     conflicts: set[str] = set()
     for record in _extract_pin_records(block):
-        rx, ry = rotate_point(float(record["x"]), -float(record["y"]), rotation)
+        # Single y-flip (library y-UP → schematic y-DOWN); see comment
+        # in get_pin_positions for the double-flip bug.
+        rx, ry = rotate_point(float(record["x"]), float(record["y"]), rotation)
         point = (round(sym_x + rx, 4), round(sym_y - ry, 4))
         number = str(record["number"])
         name = str(record["name"])
@@ -1992,12 +2142,7 @@ def get_pin_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Calculate absolute pin tip positions for a symbol placement."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return {}
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return {}
     available_units = _available_units_from_blocks(blocks)
@@ -2008,7 +2153,13 @@ def get_pin_positions(
     for block in blocks:
         direct_pins = _extract_pin_definitions(_strip_child_symbol_blocks(block))
         for pin_number, (px, py) in direct_pins.items():
-            rx, ry = rotate_point(px, -py, rotation)
+            # KiCad library files use y-UP convention; schematic editor uses
+            # y-DOWN. Single flip: subtract from sym_y. Previously this
+            # also pre-flipped the rotation input (`-py`) AND post-flipped
+            # the output (`sym_y - ry`), compounding to no net flip and
+            # returning library-frame coords (off by a y-mirror around
+            # the symbol center, e.g. VDD/VSS pins reported swapped).
+            rx, ry = rotate_point(px, py, rotation)
             pins[pin_number] = (round(sym_x + rx, 4), round(sym_y - ry, 4))
 
         block_name = _symbol_block_name(block)
@@ -2020,7 +2171,7 @@ def get_pin_positions(
                 continue
             for pin_number, (px, py) in _extract_pin_definitions(child_block).items():
                 # KiCad's pin (at x y angle) coordinate is the electrical connection point.
-                rx, ry = rotate_point(px, -py, rotation)
+                rx, ry = rotate_point(px, py, rotation)
                 pins[pin_number] = (round(sym_x + rx, 4), round(sym_y - ry, 4))
     return pins
 
@@ -2034,12 +2185,7 @@ def get_pin_alias_positions(
     unit: int = 1,
 ) -> dict[str, tuple[float, float]]:
     """Return a lookup for pin numbers, names, and normalized aliases."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return {}
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return {}
     available_units = _available_units_from_blocks(blocks)
@@ -2079,12 +2225,7 @@ def get_pin_alias_positions(
 
 def get_symbol_available_units(library: str, symbol_name: str) -> set[int]:
     """Return supported symbol units from the KiCad library."""
-    sym_file = _symbol_file(library)
-    if not sym_file.exists():
-        return set()
-
-    content = sym_file.read_text(encoding="utf-8", errors="ignore")
-    blocks = _collect_symbol_blocks(content, symbol_name)
+    blocks = _load_symbol_blocks(library, symbol_name)
     if not blocks:
         return set()
     return _available_units_from_blocks(blocks)
@@ -3409,74 +3550,39 @@ def register(mcp: FastMCP) -> None:
         snap_to_grid: bool = True,
         unit: int = 1,
     ) -> str:
-        """Add a schematic symbol at an absolute coordinate.
+        """Place a library symbol via eeschema IPC.
 
-        Coordinates snap to the 2.54 mm schematic grid by default; set
-        snap_to_grid=False only when an exact off-grid coordinate is intentional.
+        Dispatches to KiCad's ``PlaceLibrarySymbol`` IPC command, which
+        uses the same C++ constructor the GUI uses when you place a
+        symbol from the library chooser. KiCad handles all the lib→
+        instance fixup (pin transforms, default field positions,
+        attribute inheritance) internally.
+
+        Requires a KiCad build containing the ``PlaceLibrarySymbol``
+        handler (our upstream patch on ``feat/ipc-get-library-symbol``).
+        When the IPC gate is closed the tool raises
+        :class:`SchematicIPCRequiredError`.
+
+        ``footprint`` is accepted for API parity but the underlying
+        IPC command does not currently expose a footprint override; the
+        library symbol's default footprint field is preserved.
         """
-        payload = AddSymbolInput(
+        del footprint  # not yet plumbed through PlaceLibrarySymbol
+
+        target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
+        snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))
+
+        outcome = route_schematic_place_symbol(
             library=library,
             symbol_name=symbol_name,
-            x_mm=x_mm,
-            y_mm=y_mm,
+            x_mm=target_x,
+            y_mm=target_y,
             reference=reference,
             value=value,
-            footprint=footprint,
-            rotation=rotation,
-            snap_to_grid=snap_to_grid,
-            unit=unit,
+            unit=unit if unit and unit > 0 else 1,
+            orientation_degrees=rotation,
         )
-        symbol_x, symbol_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
-        snap_note = _snap_notice((payload.x_mm, payload.y_mm), (symbol_x, symbol_y))
-        lib_def = load_lib_symbol(payload.library, payload.symbol_name)
-        if lib_def is None:
-            return f"Symbol '{payload.library}:{payload.symbol_name}' was not found."
-        available_units = get_symbol_available_units(payload.library, payload.symbol_name)
-        if available_units and payload.unit not in available_units:
-            return (
-                f"Symbol '{payload.library}:{payload.symbol_name}' does not support unit "
-                f"{payload.unit}. Available units: {_format_available_units(available_units)}."
-            )
-
-        sch_file = _get_schematic_file()
-        sch_data = parse_schematic_file(sch_file)
-        root_uuid = sch_data["uuid"] or new_uuid()
-        cfg = get_config()
-        project_name = cfg.project_file.stem if cfg.project_file is not None else "KiCadMCP"
-        lib_id = f"{payload.library}:{payload.symbol_name}"
-
-        # Collision warning: does the insertion point overlap existing symbols?
-        all_existing = sch_data["symbols"] + sch_data["power_symbols"]
-        overlap_warning = _point_near_existing(symbol_x, symbol_y, all_existing)
-
-        def mutator(current: str) -> str:
-            updated = current
-            if f'(symbol "{lib_id}"' not in updated:
-                if "(lib_symbols)" in updated:
-                    updated = updated.replace("(lib_symbols)", f"(lib_symbols\n\t{lib_def}\n\t)", 1)
-                else:
-                    updated = updated.replace(
-                        "\t(lib_symbols\n", f"\t(lib_symbols\n\t{lib_def}\n", 1
-                    )
-            block = place_symbol_block(
-                lib_id=lib_id,
-                x=symbol_x,
-                y=symbol_y,
-                reference=payload.reference,
-                value=payload.value,
-                footprint=payload.footprint,
-                rotation=payload.rotation,
-                unit=payload.unit,
-                project_name=project_name,
-                root_uuid=root_uuid,
-            )
-            return _append_before_sheet_instances(updated, block)
-
-        transactional_write(mutator)
-        result = _reload_schematic()
-        fp_warning = _validate_footprint(payload.footprint or "")
-        parts = [p for p in [result, snap_note, overlap_warning, fp_warning] if p]
-        return "\n".join(parts)
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_wire(
@@ -3486,7 +3592,7 @@ def register(mcp: FastMCP) -> None:
         y2_mm: float,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a schematic wire, snapping endpoints to the 2.54 mm grid by default."""
+        """Add a schematic wire over IPC; raises if eeschema IPC is unavailable."""
         payload = AddWireInput(
             x1_mm=x1_mm,
             y1_mm=y1_mm,
@@ -3505,14 +3611,9 @@ def register(mcp: FastMCP) -> None:
             (payload.x1_mm, payload.y1_mm, payload.x2_mm, payload.y2_mm),
             wire_coords,
         )
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                wire_block(*wire_coords),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_wire_proto(*wire_coords)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_label(
@@ -3522,7 +3623,13 @@ def register(mcp: FastMCP) -> None:
         rotation: int = 0,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a schematic label, snapping its anchor to the 2.54 mm grid by default."""
+        """Add a schematic label over IPC; raises if eeschema IPC is unavailable.
+
+        Rotation is accepted for API parity but the master ``LocalLabel``
+        proto does not yet expose a rotation field — the IPC-placed label
+        is always horizontal. If non-zero rotation is required, this
+        tool will need a master-proto extension first.
+        """
         payload = AddLabelInput(
             name=name,
             x_mm=x_mm,
@@ -3532,14 +3639,9 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(payload.name, label_x, label_y, payload.rotation),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_local_label_proto(label_x, label_y, payload.name)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_power_symbol(
@@ -3549,20 +3651,25 @@ def register(mcp: FastMCP) -> None:
         rotation: int = 0,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a power symbol, snapping its anchor to the 2.54 mm grid by default."""
-        return str(
-            sch_add_symbol(
-                "power",
-                name,
-                x_mm,
-                y_mm,
-                f"#PWR{new_uuid()[:4]}",
-                name,
-                "",
-                rotation,
-                snap_to_grid,
-            )
+        """Place a power symbol (+12V, GND, +3V3, etc.) via eeschema IPC.
+
+        Power symbols in KiCad live in the ``power`` library; this tool
+        is a thin wrapper around ``sch_add_symbol`` that dispatches to
+        the ``PlaceLibrarySymbol`` IPC command.
+        """
+        target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
+        snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))
+
+        outcome = route_schematic_place_symbol(
+            library="power",
+            symbol_name=name,
+            x_mm=target_x,
+            y_mm=target_y,
+            value=name,
+            unit=1,
+            orientation_degrees=rotation,
         )
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_bus(
@@ -3572,7 +3679,7 @@ def register(mcp: FastMCP) -> None:
         y2_mm: float,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a schematic bus, snapping endpoints to the 2.54 mm grid by default."""
+        """Add a schematic bus over IPC; raises if eeschema IPC is unavailable."""
         payload = AddBusInput(
             x1_mm=x1_mm,
             y1_mm=y1_mm,
@@ -3591,14 +3698,9 @@ def register(mcp: FastMCP) -> None:
             (payload.x1_mm, payload.y1_mm, payload.x2_mm, payload.y2_mm),
             bus_coords,
         )
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                wire_block(*bus_coords, "bus"),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_bus_proto(*bus_coords)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_bus_wire_entry(
@@ -3607,7 +3709,7 @@ def register(mcp: FastMCP) -> None:
         direction: str = "up_right",
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a bus wire entry marker, snapping its anchor to the 2.54 mm grid by default."""
+        """Add a bus wire entry marker over IPC; raises if eeschema IPC is unavailable."""
         payload = AddBusWireEntryInput(
             x_mm=x_mm,
             y_mm=y_mm,
@@ -3616,29 +3718,41 @@ def register(mcp: FastMCP) -> None:
         )
         entry_x, entry_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (entry_x, entry_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                bus_entry_block(entry_x, entry_y, payload.direction),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_bus_wire_entry_proto(entry_x, entry_y, payload.direction)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_no_connect(x_mm: float, y_mm: float, snap_to_grid: bool = True) -> str:
-        """Add a no-connect marker, snapping it to the 2.54 mm grid by default."""
+        """Add a no-connect marker over IPC; raises if eeschema IPC is unavailable."""
         payload = AddNoConnectInput(x_mm=x_mm, y_mm=y_mm, snap_to_grid=snap_to_grid)
         marker_x, marker_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (marker_x, marker_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                no_connect_block(marker_x, marker_y),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_no_connect_proto(marker_x, marker_y)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
+
+    @mcp.tool()
+    def sch_add_junction(x_mm: float, y_mm: float, snap_to_grid: bool = True) -> str:
+        """Add a junction (the green dot) at a wire T-intersection via IPC.
+
+        Use when a power symbol pin or a wire endpoint sits at a midpoint
+        of another wire — KiCad doesn't auto-junction in that case and
+        ERC flags "wire not connected to anything" or "pin not connected".
+
+        Junctions snap to the **1.27mm fine grid** (same as wire endpoints
+        and passive pins) — NOT the 2.54mm symbol grid — so a junction at
+        a passive's pin coord (e.g. 57.15mm) lands cleanly instead of
+        being shifted off the wire.
+        """
+        if snap_to_grid:
+            jx, jy = _snap_wire_coord(x_mm), _snap_wire_coord(y_mm)
+        else:
+            jx, jy = x_mm, y_mm
+        snap_note = _snap_notice((x_mm, y_mm), (jx, jy))
+        proto = build_junction_proto(jx, jy)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     @headless_compatible
@@ -3691,12 +3805,8 @@ def register(mcp: FastMCP) -> None:
             key=int,
         )
 
-        units = []
-        sym_file = _symbol_file(library)
-        if sym_file.exists():
-            content = sym_file.read_text(encoding="utf-8", errors="ignore")
-            symbol_blocks = _collect_symbol_blocks(content, symbol_name)
-            units = sorted(_available_units_from_blocks(symbol_blocks))
+        symbol_blocks = _load_symbol_blocks(library, symbol_name)
+        units = sorted(_available_units_from_blocks(symbol_blocks)) if symbol_blocks else []
 
         return json.dumps(
             {
@@ -3761,29 +3871,14 @@ def register(mcp: FastMCP) -> None:
         open_by_default: bool = True,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a jumper symbol to the schematic."""
-        if pins < 2 or pins > 3:
-            raise ValueError("Only 2-pin and 3-pin jumpers are supported.")
-        target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
-        snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))
-        reference = _next_reference("JP")
-        value = f"Jumper_{pins}_{'Open' if open_by_default else 'Closed'}"
-        lib_id = f"Jumper:{value}"
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                place_symbol_block(
-                    lib_id=lib_id,
-                    x=target_x,
-                    y=target_y,
-                    reference=reference,
-                    value=value,
-                ),
-            )
+        """Add a jumper symbol over IPC. Currently unimplemented (depends on
+        the symbol-IPC work that gates ``sch_add_symbol``)."""
+        del x_mm, y_mm, pins, open_by_default, snap_to_grid
+        raise NotImplementedError(
+            "sch_add_jumper places a Jumper:* symbol, which depends on the "
+            "same SchematicSymbolInstance IPC work as sch_add_symbol. The "
+            "file-edit fallback was removed by design (2026-05-22)."
         )
-        result = _reload_schematic()
-        detail = f"Added jumper '{reference}' ({value}) at ({target_x:.2f}, {target_y:.2f}) mm."
-        return f"{detail}\n{result}\n{snap_note}" if snap_note else f"{detail}\n{result}"
 
     @mcp.tool()
     def sch_update_properties(reference: str, field: str, value: str) -> str:
@@ -3907,9 +4002,75 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def sch_save() -> str:
+        """Save the active schematic to disk via IPC SaveDocument.
+
+        Persists everything placed via sch_add_* tools (the live IPC
+        session) to the .kicad_sch file. Without this, changes are lost
+        when eeschema closes.
+        """
+        from kicad_mcp.ipc.runtime_gate import (
+            SchematicIPCRequiredError,
+            route_schematic_save,
+        )
+
+        try:
+            return route_schematic_save()
+        except SchematicIPCRequiredError as exc:
+            return f"sch_save requires live IPC: {exc}"
+
+    @mcp.tool()
+    def sch_clear_all() -> str:
+        """Delete every schematic item in the active session via IPC.
+
+        Wipes symbols, wires, labels, junctions, no-connects, textboxes,
+        and text. Useful for "nuke and rebuild" workflows. Operates on
+        the live eeschema session; unsaved until ``sch_save()``.
+        """
+        from kicad_mcp.ipc.runtime_gate import (
+            SCH_IPC_PERSISTENCE_HINT,
+            SchematicIPCRequiredError,
+            route_schematic_clear_all,
+        )
+
+        try:
+            counts = route_schematic_clear_all()
+        except SchematicIPCRequiredError as exc:
+            return f"sch_clear_all requires live IPC: {exc}"
+
+        total = counts.pop("_total", 0)
+        if total == 0:
+            return "Schematic is already empty (nothing to delete)."
+        breakdown = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+        return f"Cleared {total} items via IPC ({breakdown}). {SCH_IPC_PERSISTENCE_HINT}"
+
+    @mcp.tool()
     def sch_delete_symbol(reference: str) -> str:
         """Remove a placed symbol and any directly attached wire segments."""
         payload = DeleteSymbolInput(reference=reference)
+
+        # Try the live IPC delete path first. This is the only way to see
+        # items that were placed via sch_add_* but never saved to disk —
+        # the file-based fallback below sees only persisted items.
+        from kicad_mcp.ipc.runtime_gate import (
+            SCH_IPC_PERSISTENCE_HINT,
+            SchematicIPCRequiredError,
+            route_schematic_delete_by_reference,
+        )
+
+        ipc_unavailable_reason: str | None = None
+        try:
+            symbols, _wires = route_schematic_delete_by_reference(payload.reference)
+            if symbols > 0:
+                return (
+                    f"Deleted {symbols} symbol(s) for '{payload.reference}' via IPC. "
+                    f"{SCH_IPC_PERSISTENCE_HINT}"
+                )
+            # IPC reachable but reference not in the live session — fall
+            # through to file path in case the symbol exists on disk only.
+        except SchematicIPCRequiredError as exc:
+            ipc_unavailable_reason = str(exc)
+
         removed_wire_count = 0
         removed_symbol_count = 0
 
@@ -3955,7 +4116,12 @@ def register(mcp: FastMCP) -> None:
         try:
             transactional_write(mutator)
         except ValueError as exc:
-            return str(exc)
+            msg = str(exc)
+            if ipc_unavailable_reason is not None:
+                # IPC was tried first and failed (gate closed); surface
+                # both so the caller knows neither path saw the symbol.
+                msg = f"{msg} (IPC delete also unavailable: {ipc_unavailable_reason})"
+            return msg
 
         return (
             f"{_reload_schematic()}\n"
@@ -4345,7 +4511,12 @@ def register(mcp: FastMCP) -> None:
         rotation: int = 0,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a hierarchical label, preserving the requested shape and rotation."""
+        """Add a hierarchical label over IPC; raises if eeschema IPC is unavailable.
+
+        ``shape`` and ``rotation`` are accepted for API parity but the
+        master ``HierarchicalLabel`` proto does not yet expose those
+        fields — the IPC-placed label is always a horizontal input.
+        """
         payload = HierarchicalLabelInput(
             text=text,
             x_mm=x_mm,
@@ -4356,21 +4527,9 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(
-                    payload.text,
-                    label_x,
-                    label_y,
-                    payload.rotation,
-                    kind="hierarchical_label",
-                    shape=payload.shape,
-                ),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_hierarchical_label_proto(label_x, label_y, payload.text)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_add_global_label(
@@ -4381,7 +4540,12 @@ def register(mcp: FastMCP) -> None:
         rotation: int = 0,
         snap_to_grid: bool = True,
     ) -> str:
-        """Add a global label, preserving the requested shape and rotation."""
+        """Add a global label over IPC; raises if eeschema IPC is unavailable.
+
+        ``shape`` and ``rotation`` are accepted for API parity but the
+        master ``GlobalLabel`` proto does not yet expose those fields —
+        the IPC-placed label is always horizontal/bidirectional.
+        """
         payload = GlobalLabelInput(
             text=text,
             x_mm=x_mm,
@@ -4392,21 +4556,52 @@ def register(mcp: FastMCP) -> None:
         )
         label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
-        transactional_write(
-            lambda current: _append_before_sheet_instances(
-                current,
-                label_block(
-                    payload.text,
-                    label_x,
-                    label_y,
-                    payload.rotation,
-                    kind="global_label",
-                    shape=payload.shape,
-                ),
-            )
-        )
-        result = _reload_schematic()
-        return f"{result}\n{snap_note}" if snap_note else result
+        proto = build_global_label_proto(label_x, label_y, payload.text)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
+
+    @mcp.tool()
+    def sch_add_text(
+        text: str,
+        x_mm: float,
+        y_mm: float,
+        size_mm: float = 1.27,
+        snap_to_grid: bool = True,
+    ) -> str:
+        """Add a free-floating schematic text note via IPC.
+
+        For multi-line notes use ``\\n`` in ``text``. For a bordered box,
+        use ``sch_add_textbox``. Anchor point is left-aligned, vertically
+        centered on ``(x_mm, y_mm)``.
+        """
+        tx, ty = _snap_point(x_mm, y_mm, snap_to_grid)
+        snap_note = _snap_notice((x_mm, y_mm), (tx, ty))
+        proto = build_text_proto(tx, ty, text, size_mm=size_mm)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
+
+    @mcp.tool()
+    def sch_add_textbox(
+        text: str,
+        x1_mm: float,
+        y1_mm: float,
+        x2_mm: float,
+        y2_mm: float,
+        size_mm: float = 1.27,
+        snap_to_grid: bool = True,
+    ) -> str:
+        """Add a bordered schematic text box (annotated note) via IPC.
+
+        Top-left and bottom-right corners define the box. Text is
+        left-aligned, top-anchored, with a small interior margin so it
+        doesn't crash into the border. Good for design notes like
+        "R_PROG=10k → 100mA charge" or "V_in max 6V".
+        """
+        box_x1, box_y1, box_x2, box_y2 = _snap_line(x1_mm, y1_mm, x2_mm, y2_mm, snap_to_grid)
+        snap_note = _snap_notice((x1_mm, y1_mm, x2_mm, y2_mm), (box_x1, box_y1, box_x2, box_y2))
+        proto = build_textbox_proto(box_x1, box_y1, box_x2, box_y2, text, size_mm=size_mm)
+        outcome = route_schematic_create([proto])
+        return f"{outcome}\n{snap_note}" if snap_note else outcome
 
     @mcp.tool()
     def sch_list_sheets() -> str:
@@ -4555,10 +4750,20 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @headless_compatible
     def sch_add_missing_junctions() -> str:
-        """Insert missing schematic junctions at T-intersection wire endpoints."""
-        summary = run_auto_add_missing_junctions()
-        result = _reload_schematic()
-        return f"{result}\n{summary}"
+        """Insert missing schematic junctions over IPC. Currently unimplemented.
+
+        Detection (scanning for T-intersections) lives in
+        ``run_auto_add_missing_junctions`` and operates on file-text. To
+        do this over IPC we would either (a) re-implement detection on
+        ``GetItems`` results, or (b) keep file-side detection and
+        dispatch the discovered set as a batch ``route_schematic_create``.
+        The file-edit path that previously also wrote junctions was
+        removed (2026-05-22) so MCP cannot silently rewrite the .kicad_sch.
+        """
+        raise NotImplementedError(
+            "sch_add_missing_junctions over IPC is not yet implemented. "
+            "The file-edit fallback was removed by design (2026-05-22)."
+        )
 
     @mcp.tool()
     def sch_get_connectivity_graph() -> str:

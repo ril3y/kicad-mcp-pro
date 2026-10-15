@@ -20,6 +20,15 @@ def _run(command: list[str]) -> int:
     return completed.returncode
 
 
+_RUFF_EXCLUDED_PREFIXES = (
+    # Auto-generated protobuf stubs — honored via ruff's extend-exclude in
+    # pyproject.toml when ruff walks the tree itself, but the hook passes
+    # explicit paths, which bypasses extend-exclude. Filter here so we
+    # match repo policy in both modes.
+    "src/kicad_mcp/_master_proto/",
+)
+
+
 def _staged_python_files() -> list[str]:
     completed = subprocess.run(
         [_executable("git"), "diff", "--cached", "--name-only", "--diff-filter=ACMRTUXB"],
@@ -34,8 +43,12 @@ def _staged_python_files() -> list[str]:
     files: list[str] = []
     for raw_path in completed.stdout.splitlines():
         path = Path(raw_path)
-        if path.suffix == ".py" and path.exists():
-            files.append(raw_path)
+        if path.suffix != ".py" or not path.exists():
+            continue
+        posix = raw_path.replace("\\", "/")
+        if any(posix.startswith(prefix) for prefix in _RUFF_EXCLUDED_PREFIXES):
+            continue
+        files.append(raw_path)
     return files
 
 

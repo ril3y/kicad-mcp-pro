@@ -69,6 +69,11 @@ from ..models.pcb import (
     StackupLayerSpec,
     SyncPcbFromSchematicInput,
 )
+from ..utils.ampacity import (
+    ipc2221_current_capacity_a,
+    recommended_fuse_rating_a,
+)
+from ..utils.board_tracks import TrackSegment, segments_for_net
 from ..utils.cache import clear_ttl_cache, ttl_cache
 from ..utils.impedance import TraceType, copper_thickness_mm, trace_impedance
 from ..utils.layers import CANONICAL_LAYER_NAMES, resolve_layer, resolve_layer_name
@@ -651,6 +656,23 @@ def _transactional_board_write(mutator: Callable[[str], str]) -> str:
     temp_path.replace(board_file)
     clear_ttl_cache()
     return str(board_file)
+
+
+def _format_layer_breakdown(layer_counts: dict[str, int]) -> str:
+    """Render a ``{'F.Cu': 8, 'B.Cu': 4}`` breakdown as ``8 on F.Cu, 4 on B.Cu``.
+
+    Sorted by descending count so the dominant layer shows first.
+    """
+    sorted_layers = sorted(layer_counts.items(), key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{count} on {layer}" for layer, count in sorted_layers)
+
+
+def _limiting_segment(segments: list[TrackSegment]) -> TrackSegment:
+    """Pick the segment with the smallest width — that's the ampacity bottleneck.
+
+    Ties broken by layer name (deterministic for snapshot tests).
+    """
+    return min(segments, key=lambda seg: (seg.width_mm, seg.layer))
 
 
 def _resolve_read_source() -> tuple[Path | None, bool]:
@@ -2486,6 +2508,131 @@ def register(mcp: FastMCP) -> None:
             return f"Footprint '{reference}' was not found in the board file."
         layers = _footprint_layers_from_block(str(entry["block"]))
         return json.dumps({"reference": reference, "layers": layers}, indent=2)
+
+    @mcp.tool()
+    @headless_compatible
+    def pcb_get_net_traces(net_name: str, case_sensitive: bool = True) -> str:
+        """List every routed track segment on ``net_name`` from the
+        configured ``.kicad_pcb`` file directly (no live IPC required).
+
+        Headless sibling of ``pcb_get_tracks`` — useful before fab, when
+        pcbnew is closed, when running in CI, or when an MCP IPC session
+        isn't available. Output reports per-segment width/layer/length plus
+        a summary with the limiting (minimum) width across the net.
+        """
+        pcb_path = _get_pcb_file_for_sync()
+        content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
+        segments = segments_for_net(content, net_name, case_sensitive=case_sensitive)
+        if not segments:
+            return f"No routed track segments were found for net '{net_name}' in {pcb_path.name}."
+        min_width = min(seg.width_mm for seg in segments)
+        max_width = max(seg.width_mm for seg in segments)
+        total_length = sum(seg.length_mm for seg in segments)
+        layer_counts: dict[str, int] = {}
+        for seg in segments:
+            layer_counts[seg.layer] = layer_counts.get(seg.layer, 0) + 1
+
+        lines = [
+            f"Net '{segments[0].net_name}' tracks in {pcb_path.name}:",
+            f"- Segments: {len(segments)} ({_format_layer_breakdown(layer_counts)})",
+            f"- Width range: {min_width:.3f} mm (min) - {max_width:.3f} mm (max)",
+            f"- Total length: {total_length:.2f} mm",
+        ]
+        for index, seg in enumerate(segments, start=1):
+            lines.append(
+                f"{index}. "
+                f"({seg.start_mm[0]:.3f}, {seg.start_mm[1]:.3f}) -> "
+                f"({seg.end_mm[0]:.3f}, {seg.end_mm[1]:.3f}) mm  "
+                f"layer={seg.layer} width={seg.width_mm:.3f} mm "
+                f"length={seg.length_mm:.3f} mm"
+            )
+        return "\n".join(lines)
+
+    @mcp.tool()
+    @headless_compatible
+    def pcb_check_trace_ampacity(
+        net_name: str,
+        expected_current_a: float = 0.0,
+        max_temp_rise_c: float = 20.0,
+        copper_weight_oz: float = 1.0,
+    ) -> str:
+        """Estimate per-IPC-2221 ampacity for the narrowest routed segment
+        on ``net_name`` and (optionally) verify it carries ``expected_current_a``.
+
+        Reads the configured ``.kicad_pcb`` directly — no live IPC. Reports
+        capacity at four standard ΔT thresholds (10/20/30/60 °C) plus a
+        recommended automotive blade-fuse size (70 % of the ΔT 20 °C limit,
+        rounded down to the next stocked ATO / mini-ATO rating).
+
+        Scope notes:
+        - Uses IPC-2221 §6.2 — the conservative chart-derived fit. IPC-2152
+          is typically 30-50 % more permissive (it accounts for adjacent
+          copper and thermal mass). For dense boards consider that derate.
+        - Inner layers default to 1 oz copper. Many fabs run 0.5 oz inner
+          on 4+ layer stackups; override ``copper_weight_oz`` accordingly.
+          The tool does not yet parse the board's (stackup) block.
+        - Vias are excluded from the routed-length sum. For nets that
+          change layer mid-route this slightly understates total length
+          (vias add negligible series resistance, so capacity is unaffected).
+        """
+        pcb_path = _get_pcb_file_for_sync()
+        content = _normalize_board_content(pcb_path.read_text(encoding="utf-8"))
+        segments = segments_for_net(content, net_name)
+        if not segments:
+            return f"No routed track segments were found for net '{net_name}' in {pcb_path.name}."
+
+        limiting = _limiting_segment(segments)
+        copper_mm = copper_thickness_mm(copper_weight_oz)
+        external = limiting.layer in ("F.Cu", "B.Cu")
+        capacity_at = {
+            delta_t: ipc2221_current_capacity_a(
+                limiting.width_mm,
+                copper_mm,
+                external=external,
+                max_temp_rise_c=delta_t,
+            )
+            for delta_t in (10.0, 20.0, 30.0, 60.0)
+        }
+        chosen_capacity_a = ipc2221_current_capacity_a(
+            limiting.width_mm,
+            copper_mm,
+            external=external,
+            max_temp_rise_c=max_temp_rise_c,
+        )
+        fuse_a = recommended_fuse_rating_a(capacity_at[20.0])
+
+        lines = [
+            f"Net '{limiting.net_name}' ampacity (IPC-2221) in {pcb_path.name}:",
+            f"- Limiting segment: {limiting.width_mm:.3f} mm wide on {limiting.layer} "
+            f"({'external' if external else 'internal'} layer)",
+            f"- Copper weight assumed: {copper_weight_oz:.2f} oz "
+            f"(thickness {copper_mm * 1000:.1f} um)",
+            "- Max continuous current vs ambient ΔT:",
+            f"    ΔT 10 C: {capacity_at[10.0]:.2f} A",
+            f"    ΔT 20 C: {capacity_at[20.0]:.2f} A  (reference)",
+            f"    ΔT 30 C: {capacity_at[30.0]:.2f} A",
+            f"    ΔT 60 C: {capacity_at[60.0]:.2f} A",
+        ]
+        if expected_current_a > 0.0:
+            margin_pct = (
+                100.0 * expected_current_a / chosen_capacity_a if chosen_capacity_a else 0.0
+            )
+            verdict = "OK" if expected_current_a <= chosen_capacity_a else "FAIL"
+            lines.append(
+                f"- Load check (expected {expected_current_a:.3f} A @ ΔT {max_temp_rise_c:.0f} C): "
+                f"{verdict} ({margin_pct:.1f}% of capacity)"
+            )
+        if fuse_a > 0.0:
+            lines.append(
+                f"- Recommended fuse rating: {fuse_a:.1f} A "
+                f"(70% of ΔT 20 C capacity, rounded to standard blade size)"
+            )
+        else:
+            lines.append(
+                "- Recommended fuse rating: trace is too narrow for any standard "
+                "blade-fuse size below 70% of capacity."
+            )
+        return "\n".join(lines)
 
     @mcp.tool()
     @requires_kicad_running
