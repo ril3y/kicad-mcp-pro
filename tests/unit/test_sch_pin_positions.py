@@ -274,7 +274,7 @@ def test_get_pin_positions_resolves_easyeda_via_sym_lib_table(
     assert set(pins.keys()) == {"1", "2", "3", "4", "5"}
     # Pin 1 sits at symbol-local (-7.62, 2.54). At placement (100, 50)
     # with rotation 0 the absolute coordinate is (100 + (-7.62), 50 - 2.54).
-    assert pins["1"] == pytest.approx((92.38, 52.54), abs=1e-3)
+    assert pins["1"] == pytest.approx((92.38, 47.46), abs=1e-3)
 
 
 def test_get_pin_positions_falls_back_to_embedded_lib_symbols_on_library_rename(
@@ -332,7 +332,7 @@ def test_get_pin_positions_falls_back_to_embedded_lib_symbols_on_library_rename(
 
     pins = get_pin_positions("easyeda", "G2R-2-DC12V", 100.0, 50.0, rotation=0, unit=1)
     assert set(pins.keys()) == {"1", "2"}
-    assert pins["1"] == pytest.approx((92.38, 52.54), abs=1e-3)
+    assert pins["1"] == pytest.approx((92.38, 47.46), abs=1e-3)
 
 
 def test_load_lib_symbol_returns_none_for_unknown_library(
