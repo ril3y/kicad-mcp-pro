@@ -23,7 +23,14 @@ from ..utils.sexpr import _sexpr_string
 from ..utils.units import _coord_nm, mm_to_nm, nm_to_mm
 from .export_support import _get_pcb_file
 from .metadata import headless_compatible, requires_dependency, requires_kicad_running
-from .routing_rules import _load_rules_content, _mm, _rules_file_path, _upsert_rule, _write_rule
+from .routing_rules import (
+    _load_rules_content,
+    _mm,
+    _net_class_rule_body,
+    _rules_file_path,
+    _upsert_rule,
+    _write_rule,
+)
 
 __all__ = [
     "_load_rules_content",
@@ -96,40 +103,6 @@ def _infer_diff_pair_base(net_p: str, net_n: str) -> str | None:
         if match_p and match_n and match_p.group(1) == match_n.group(1):
             return match_p.group(1).rstrip("_-+/")
     return None
-
-
-def _net_class_rule_body(
-    net_class: str,
-    width_mm: float,
-    clearance_mm: float,
-    via_diameter_mm: float,
-    via_drill_mm: float,
-) -> tuple[str, str]:
-    track_width_constraint = (
-        f"  (constraint track_width (min {_mm(width_mm)}) "
-        f"(opt {_mm(width_mm)}) (max {_mm(width_mm)}))"
-    )
-    via_diameter_constraint = (
-        f"  (constraint via_diameter (min {_mm(via_diameter_mm)}) "
-        f"(opt {_mm(via_diameter_mm)}) (max {_mm(via_diameter_mm)}))"
-    )
-    via_drill_constraint = (
-        f"  (constraint via_drill (min {_mm(via_drill_mm)}) "
-        f"(opt {_mm(via_drill_mm)}) (max {_mm(via_drill_mm)}))"
-    )
-    name = f"Net class {net_class}"
-    body = "\n".join(
-        [
-            f"(rule {_sexpr_string(name)}",
-            f"  (condition \"A.NetClass == '{net_class}'\")",
-            track_width_constraint,
-            f"  (constraint clearance (min {_mm(clearance_mm)}))",
-            via_diameter_constraint,
-            via_drill_constraint,
-            ")",
-        ]
-    )
-    return name, body
 
 
 def _diff_pair_rule_body(

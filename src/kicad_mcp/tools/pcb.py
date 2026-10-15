@@ -3051,12 +3051,13 @@ def register(mcp: FastMCP) -> None:
         from ..models.pcb import SetDesignRulesInput as _SetDesignRulesInput
 
         # _net_class_rule_body / _mm / _rules_file_path / _write_rule are
-        # intentionally re-used cross-module to avoid duplicating .kicad_dru
-        # write logic. Both sibling modules live under kicad_mcp.tools so the
-        # private-usage warning is a false positive for this in-package call.
-        from .routing import _net_class_rule_body  # pyright: ignore[reportPrivateUsage]
+        # intentionally re-used from routing_rules (shared with routing.py) to
+        # avoid duplicating .kicad_dru write logic. Both sibling modules live
+        # under kicad_mcp.tools so the private-usage warning is a false
+        # positive for this in-package call.
         from .routing_rules import (
             _mm,  # pyright: ignore[reportPrivateUsage]
+            _net_class_rule_body,  # pyright: ignore[reportPrivateUsage]
             _rules_file_path,  # pyright: ignore[reportPrivateUsage]
             _write_rule,  # pyright: ignore[reportPrivateUsage]
         )
