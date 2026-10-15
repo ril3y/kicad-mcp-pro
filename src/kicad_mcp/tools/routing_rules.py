@@ -93,3 +93,37 @@ def _write_rule(rule_name: str, rule_body: str) -> Path:
 
 def _mm(value: float) -> str:
     return f"{value:.4f}mm"
+
+
+def _net_class_rule_body(
+    net_class: str,
+    width_mm: float,
+    clearance_mm: float,
+    via_diameter_mm: float,
+    via_drill_mm: float,
+) -> tuple[str, str]:
+    track_width_constraint = (
+        f"  (constraint track_width (min {_mm(width_mm)}) "
+        f"(opt {_mm(width_mm)}) (max {_mm(width_mm)}))"
+    )
+    via_diameter_constraint = (
+        f"  (constraint via_diameter (min {_mm(via_diameter_mm)}) "
+        f"(opt {_mm(via_diameter_mm)}) (max {_mm(via_diameter_mm)}))"
+    )
+    via_drill_constraint = (
+        f"  (constraint via_drill (min {_mm(via_drill_mm)}) "
+        f"(opt {_mm(via_drill_mm)}) (max {_mm(via_drill_mm)}))"
+    )
+    name = f"Net class {net_class}"
+    body = "\n".join(
+        [
+            f"(rule {_sexpr_string(name)}",
+            f"  (condition \"A.NetClass == '{net_class}'\")",
+            track_width_constraint,
+            f"  (constraint clearance (min {_mm(clearance_mm)}))",
+            via_diameter_constraint,
+            via_drill_constraint,
+            ")",
+        ]
+    )
+    return name, body

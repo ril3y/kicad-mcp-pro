@@ -1650,6 +1650,43 @@ async def test_pcb_set_design_rules_writes_board_level_constraints(
 
 
 @pytest.mark.anyio
+async def test_pcb_set_design_rules_surfaces_apply_failure(
+    sample_project,
+    mock_kicad,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The except (OSError, ValueError) around ``_apply_board_design_rules``
+    must surface the failure as a clean string response, not crash. This
+    branch was added when the rule-definitions logic got factored out for
+    reuse by ``pcb_apply_manufacturer_profile``."""
+    from kicad_mcp.tools import pcb as pcb_tools
+
+    def _boom(_payload: object) -> None:  # pyright: ignore[reportUnusedFunction]
+        raise OSError("rules file is locked by another process")
+
+    monkeypatch.setattr(pcb_tools, "_apply_board_design_rules", _boom)
+
+    server = build_server("pcb")
+    await call_tool_text(server, "kicad_set_project", {"project_dir": str(sample_project)})
+
+    result = await call_tool_text(
+        server,
+        "pcb_set_design_rules",
+        {
+            "min_trace_width_mm": 0.15,
+            "min_clearance_mm": 0.15,
+            "min_via_drill_mm": 0.3,
+            "min_via_diameter_mm": 0.6,
+            "min_annular_ring_mm": 0.13,
+            "min_hole_to_hole_mm": 0.25,
+        },
+    )
+
+    assert "Board design rule update failed" in result
+    assert "rules file is locked by another process" in result
+
+
+@pytest.mark.anyio
 async def test_pcb_set_stackup_persists_file_and_supports_impedance_lookup(
     sample_project,
     mock_board,
