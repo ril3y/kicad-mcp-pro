@@ -68,6 +68,22 @@ class NetClass(_message.Message):
     constituents: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, name: _Optional[str] = ..., priority: _Optional[int] = ..., board: _Optional[_Union[NetClassBoardSettings, _Mapping]] = ..., schematic: _Optional[_Union[NetClassSchematicSettings, _Mapping]] = ..., type: _Optional[_Union[NetClassType, str]] = ..., constituents: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class NetClassAssignment(_message.Message):
+    __slots__ = ("net", "netclasses")
+    NET_FIELD_NUMBER: _ClassVar[int]
+    NETCLASSES_FIELD_NUMBER: _ClassVar[int]
+    net: str
+    netclasses: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, net: _Optional[str] = ..., netclasses: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class NetClassPatternAssignment(_message.Message):
+    __slots__ = ("pattern", "netclass")
+    PATTERN_FIELD_NUMBER: _ClassVar[int]
+    NETCLASS_FIELD_NUMBER: _ClassVar[int]
+    pattern: str
+    netclass: str
+    def __init__(self, pattern: _Optional[str] = ..., netclass: _Optional[str] = ...) -> None: ...
+
 class TextVariables(_message.Message):
     __slots__ = ("variables",)
     class VariablesEntry(_message.Message):

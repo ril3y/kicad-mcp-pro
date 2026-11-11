@@ -19,6 +19,7 @@ class WizardParameterDataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper)
     WPDT_INTEGER: _ClassVar[WizardParameterDataType]
     WPDT_REAL: _ClassVar[WizardParameterDataType]
     WPDT_BOOL: _ClassVar[WizardParameterDataType]
+    WPDT_ENUM: _ClassVar[WizardParameterDataType]
 
 class WizardParameterCategory(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -50,6 +51,7 @@ WPDT_STRING: WizardParameterDataType
 WPDT_INTEGER: WizardParameterDataType
 WPDT_REAL: WizardParameterDataType
 WPDT_BOOL: WizardParameterDataType
+WPDT_ENUM: WizardParameterDataType
 WPC_UNKNOWN: WizardParameterCategory
 WPC_PACKAGE: WizardParameterCategory
 WPC_PADS: WizardParameterCategory
@@ -107,6 +109,24 @@ class WizardStringParameter(_message.Message):
     validation_regex: str
     def __init__(self, value: _Optional[str] = ..., default: _Optional[str] = ..., validation_regex: _Optional[str] = ...) -> None: ...
 
+class WizardEnumChoice(_message.Message):
+    __slots__ = ("identifier", "label")
+    IDENTIFIER_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    identifier: str
+    label: str
+    def __init__(self, identifier: _Optional[str] = ..., label: _Optional[str] = ...) -> None: ...
+
+class WizardEnumParameter(_message.Message):
+    __slots__ = ("value", "default", "choices")
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_FIELD_NUMBER: _ClassVar[int]
+    CHOICES_FIELD_NUMBER: _ClassVar[int]
+    value: int
+    default: int
+    choices: _containers.RepeatedCompositeFieldContainer[WizardEnumChoice]
+    def __init__(self, value: _Optional[int] = ..., default: _Optional[int] = ..., choices: _Optional[_Iterable[_Union[WizardEnumChoice, _Mapping]]] = ...) -> None: ...
+
 class WizardParameterList(_message.Message):
     __slots__ = ("parameters",)
     PARAMETERS_FIELD_NUMBER: _ClassVar[int]
@@ -114,7 +134,7 @@ class WizardParameterList(_message.Message):
     def __init__(self, parameters: _Optional[_Iterable[_Union[WizardParameter, _Mapping]]] = ...) -> None: ...
 
 class WizardParameter(_message.Message):
-    __slots__ = ("identifier", "name", "description", "category", "type", "int", "real", "bool", "string")
+    __slots__ = ("identifier", "name", "description", "category", "type", "int", "real", "bool", "string", "enum")
     IDENTIFIER_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
@@ -124,6 +144,7 @@ class WizardParameter(_message.Message):
     REAL_FIELD_NUMBER: _ClassVar[int]
     BOOL_FIELD_NUMBER: _ClassVar[int]
     STRING_FIELD_NUMBER: _ClassVar[int]
+    ENUM_FIELD_NUMBER: _ClassVar[int]
     identifier: str
     name: str
     description: str
@@ -133,7 +154,8 @@ class WizardParameter(_message.Message):
     real: WizardRealParameter
     bool: WizardBoolParameter
     string: WizardStringParameter
-    def __init__(self, identifier: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., category: _Optional[_Union[WizardParameterCategory, str]] = ..., type: _Optional[_Union[WizardParameterDataType, str]] = ..., int: _Optional[_Union[WizardIntParameter, _Mapping]] = ..., real: _Optional[_Union[WizardRealParameter, _Mapping]] = ..., bool: _Optional[_Union[WizardBoolParameter, _Mapping]] = ..., string: _Optional[_Union[WizardStringParameter, _Mapping]] = ...) -> None: ...
+    enum: WizardEnumParameter
+    def __init__(self, identifier: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., category: _Optional[_Union[WizardParameterCategory, str]] = ..., type: _Optional[_Union[WizardParameterDataType, str]] = ..., int: _Optional[_Union[WizardIntParameter, _Mapping]] = ..., real: _Optional[_Union[WizardRealParameter, _Mapping]] = ..., bool: _Optional[_Union[WizardBoolParameter, _Mapping]] = ..., string: _Optional[_Union[WizardStringParameter, _Mapping]] = ..., enum: _Optional[_Union[WizardEnumParameter, _Mapping]] = ...) -> None: ...
 
 class WizardInfo(_message.Message):
     __slots__ = ("meta", "parameters")

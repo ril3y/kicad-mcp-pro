@@ -17,6 +17,7 @@ class ApiStatusCode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     AS_TOKEN_MISMATCH: _ClassVar[ApiStatusCode]
     AS_BUSY: _ClassVar[ApiStatusCode]
     AS_UNIMPLEMENTED: _ClassVar[ApiStatusCode]
+    AS_INTERNAL_ERROR: _ClassVar[ApiStatusCode]
 AS_UNKNOWN: ApiStatusCode
 AS_OK: ApiStatusCode
 AS_TIMEOUT: ApiStatusCode
@@ -26,6 +27,7 @@ AS_UNHANDLED: ApiStatusCode
 AS_TOKEN_MISMATCH: ApiStatusCode
 AS_BUSY: ApiStatusCode
 AS_UNIMPLEMENTED: ApiStatusCode
+AS_INTERNAL_ERROR: ApiStatusCode
 
 class ApiRequestHeader(_message.Message):
     __slots__ = ("kicad_token", "client_name")

@@ -14,6 +14,12 @@ class SchematicJobPageSize(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SJPS_A4: _ClassVar[SchematicJobPageSize]
     SJPS_A: _ClassVar[SchematicJobPageSize]
 
+class SchematicJobSheetMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SJSM_UNKNOWN: _ClassVar[SchematicJobSheetMode]
+    SJSM_ALL_SHEETS: _ClassVar[SchematicJobSheetMode]
+    SJSM_SINGLE_SHEET: _ClassVar[SchematicJobSheetMode]
+
 class SchematicNetlistFormat(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     SNF_UNKNOWN: _ClassVar[SchematicNetlistFormat]
@@ -31,10 +37,19 @@ class BOMSortDirection(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BSD_UNKNOWN: _ClassVar[BOMSortDirection]
     BSD_ASCENDING: _ClassVar[BOMSortDirection]
     BSD_DESCENDING: _ClassVar[BOMSortDirection]
+
+class BOMFilterScope(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BFS_REFERENCE: _ClassVar[BOMFilterScope]
+    BFS_VISIBLE: _ClassVar[BOMFilterScope]
+    BFS_ALL: _ClassVar[BOMFilterScope]
 SJPS_UNKNOWN: SchematicJobPageSize
 SJPS_AUTO: SchematicJobPageSize
 SJPS_A4: SchematicJobPageSize
 SJPS_A: SchematicJobPageSize
+SJSM_UNKNOWN: SchematicJobSheetMode
+SJSM_ALL_SHEETS: SchematicJobSheetMode
+SJSM_SINGLE_SHEET: SchematicJobSheetMode
 SNF_UNKNOWN: SchematicNetlistFormat
 SNF_KICAD_XML: SchematicNetlistFormat
 SNF_KICAD_SEXPR: SchematicNetlistFormat
@@ -47,9 +62,12 @@ SNF_ALLEGRO: SchematicNetlistFormat
 BSD_UNKNOWN: BOMSortDirection
 BSD_ASCENDING: BOMSortDirection
 BSD_DESCENDING: BOMSortDirection
+BFS_REFERENCE: BOMFilterScope
+BFS_VISIBLE: BOMFilterScope
+BFS_ALL: BOMFilterScope
 
 class SchematicPlotSettings(_message.Message):
-    __slots__ = ("drawing_sheet", "default_font", "variant", "plot_all", "plot_drawing_sheet", "plot_pages", "show_hop_over", "black_and_white", "page_size", "use_background_color", "min_pen_width", "theme")
+    __slots__ = ("drawing_sheet", "default_font", "variant", "plot_all", "plot_drawing_sheet", "plot_pages", "show_hop_over", "black_and_white", "page_size", "use_background_color", "min_pen_width", "theme", "sheet_mode")
     DRAWING_SHEET_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_FONT_FIELD_NUMBER: _ClassVar[int]
     VARIANT_FIELD_NUMBER: _ClassVar[int]
@@ -62,6 +80,7 @@ class SchematicPlotSettings(_message.Message):
     USE_BACKGROUND_COLOR_FIELD_NUMBER: _ClassVar[int]
     MIN_PEN_WIDTH_FIELD_NUMBER: _ClassVar[int]
     THEME_FIELD_NUMBER: _ClassVar[int]
+    SHEET_MODE_FIELD_NUMBER: _ClassVar[int]
     drawing_sheet: str
     default_font: str
     variant: str
@@ -74,7 +93,8 @@ class SchematicPlotSettings(_message.Message):
     use_background_color: bool
     min_pen_width: int
     theme: str
-    def __init__(self, drawing_sheet: _Optional[str] = ..., default_font: _Optional[str] = ..., variant: _Optional[str] = ..., plot_all: bool = ..., plot_drawing_sheet: bool = ..., plot_pages: _Optional[_Iterable[str]] = ..., show_hop_over: bool = ..., black_and_white: bool = ..., page_size: _Optional[_Union[SchematicJobPageSize, str]] = ..., use_background_color: bool = ..., min_pen_width: _Optional[int] = ..., theme: _Optional[str] = ...) -> None: ...
+    sheet_mode: SchematicJobSheetMode
+    def __init__(self, drawing_sheet: _Optional[str] = ..., default_font: _Optional[str] = ..., variant: _Optional[str] = ..., plot_all: bool = ..., plot_drawing_sheet: bool = ..., plot_pages: _Optional[_Iterable[str]] = ..., show_hop_over: bool = ..., black_and_white: bool = ..., page_size: _Optional[_Union[SchematicJobPageSize, str]] = ..., use_background_color: bool = ..., min_pen_width: _Optional[int] = ..., theme: _Optional[str] = ..., sheet_mode: _Optional[_Union[SchematicJobSheetMode, str]] = ...) -> None: ...
 
 class RunSchematicJobExportSvg(_message.Message):
     __slots__ = ("job_settings", "plot_settings")
@@ -114,6 +134,20 @@ class RunSchematicJobExportPs(_message.Message):
     plot_settings: SchematicPlotSettings
     def __init__(self, job_settings: _Optional[_Union[_jobs_pb2.RunJobSettings, _Mapping]] = ..., plot_settings: _Optional[_Union[SchematicPlotSettings, _Mapping]] = ...) -> None: ...
 
+class RunSchematicJobExportPng(_message.Message):
+    __slots__ = ("job_settings", "plot_settings", "dpi", "antialiasing", "plot_background_color")
+    JOB_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    PLOT_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    DPI_FIELD_NUMBER: _ClassVar[int]
+    ANTIALIASING_FIELD_NUMBER: _ClassVar[int]
+    PLOT_BACKGROUND_COLOR_FIELD_NUMBER: _ClassVar[int]
+    job_settings: _jobs_pb2.RunJobSettings
+    plot_settings: SchematicPlotSettings
+    dpi: int
+    antialiasing: _jobs_pb2.AntialiasingMode
+    plot_background_color: bool
+    def __init__(self, job_settings: _Optional[_Union[_jobs_pb2.RunJobSettings, _Mapping]] = ..., plot_settings: _Optional[_Union[SchematicPlotSettings, _Mapping]] = ..., dpi: _Optional[int] = ..., antialiasing: _Optional[_Union[_jobs_pb2.AntialiasingMode, str]] = ..., plot_background_color: bool = ...) -> None: ...
+
 class RunSchematicJobExportNetlist(_message.Message):
     __slots__ = ("job_settings", "format", "variant_name")
     JOB_SETTINGS_FIELD_NUMBER: _ClassVar[int]
@@ -125,7 +159,7 @@ class RunSchematicJobExportNetlist(_message.Message):
     def __init__(self, job_settings: _Optional[_Union[_jobs_pb2.RunJobSettings, _Mapping]] = ..., format: _Optional[_Union[SchematicNetlistFormat, str]] = ..., variant_name: _Optional[str] = ...) -> None: ...
 
 class BOMFormatSettings(_message.Message):
-    __slots__ = ("preset_name", "field_delimiter", "string_delimiter", "ref_delimiter", "ref_range_delimiter", "keep_tabs", "keep_line_breaks")
+    __slots__ = ("preset_name", "field_delimiter", "string_delimiter", "ref_delimiter", "ref_range_delimiter", "keep_tabs", "keep_line_breaks", "include_byte_order_mark")
     PRESET_NAME_FIELD_NUMBER: _ClassVar[int]
     FIELD_DELIMITER_FIELD_NUMBER: _ClassVar[int]
     STRING_DELIMITER_FIELD_NUMBER: _ClassVar[int]
@@ -133,6 +167,7 @@ class BOMFormatSettings(_message.Message):
     REF_RANGE_DELIMITER_FIELD_NUMBER: _ClassVar[int]
     KEEP_TABS_FIELD_NUMBER: _ClassVar[int]
     KEEP_LINE_BREAKS_FIELD_NUMBER: _ClassVar[int]
+    INCLUDE_BYTE_ORDER_MARK_FIELD_NUMBER: _ClassVar[int]
     preset_name: str
     field_delimiter: str
     string_delimiter: str
@@ -140,7 +175,8 @@ class BOMFormatSettings(_message.Message):
     ref_range_delimiter: str
     keep_tabs: bool
     keep_line_breaks: bool
-    def __init__(self, preset_name: _Optional[str] = ..., field_delimiter: _Optional[str] = ..., string_delimiter: _Optional[str] = ..., ref_delimiter: _Optional[str] = ..., ref_range_delimiter: _Optional[str] = ..., keep_tabs: bool = ..., keep_line_breaks: bool = ...) -> None: ...
+    include_byte_order_mark: bool
+    def __init__(self, preset_name: _Optional[str] = ..., field_delimiter: _Optional[str] = ..., string_delimiter: _Optional[str] = ..., ref_delimiter: _Optional[str] = ..., ref_range_delimiter: _Optional[str] = ..., keep_tabs: bool = ..., keep_line_breaks: bool = ..., include_byte_order_mark: bool = ...) -> None: ...
 
 class BOMField(_message.Message):
     __slots__ = ("name", "label", "group_by")
@@ -153,18 +189,20 @@ class BOMField(_message.Message):
     def __init__(self, name: _Optional[str] = ..., label: _Optional[str] = ..., group_by: bool = ...) -> None: ...
 
 class BOMFieldSettings(_message.Message):
-    __slots__ = ("preset_name", "fields", "sort_field", "sort_direction", "filter")
+    __slots__ = ("preset_name", "fields", "sort_field", "sort_direction", "filter", "filter_scope")
     PRESET_NAME_FIELD_NUMBER: _ClassVar[int]
     FIELDS_FIELD_NUMBER: _ClassVar[int]
     SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
     SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
     FILTER_FIELD_NUMBER: _ClassVar[int]
+    FILTER_SCOPE_FIELD_NUMBER: _ClassVar[int]
     preset_name: str
     fields: _containers.RepeatedCompositeFieldContainer[BOMField]
     sort_field: str
     sort_direction: BOMSortDirection
     filter: str
-    def __init__(self, preset_name: _Optional[str] = ..., fields: _Optional[_Iterable[_Union[BOMField, _Mapping]]] = ..., sort_field: _Optional[str] = ..., sort_direction: _Optional[_Union[BOMSortDirection, str]] = ..., filter: _Optional[str] = ...) -> None: ...
+    filter_scope: BOMFilterScope
+    def __init__(self, preset_name: _Optional[str] = ..., fields: _Optional[_Iterable[_Union[BOMField, _Mapping]]] = ..., sort_field: _Optional[str] = ..., sort_direction: _Optional[_Union[BOMSortDirection, str]] = ..., filter: _Optional[str] = ..., filter_scope: _Optional[_Union[BOMFilterScope, str]] = ...) -> None: ...
 
 class RunSchematicJobExportBOM(_message.Message):
     __slots__ = ("job_settings", "format", "fields", "exclude_dnp", "group_symbols", "variant_name")

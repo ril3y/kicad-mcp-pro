@@ -54,6 +54,14 @@ class KiCadObjectType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     KOT_WSG_PAGE: _ClassVar[KiCadObjectType]
     KOT_SCH_GROUP: _ClassVar[KiCadObjectType]
     KOT_PCB_BARCODE: _ClassVar[KiCadObjectType]
+    KOT_PCB_CONSTRAINT: _ClassVar[KiCadObjectType]
+    KOT_PCB_GRIDITEM: _ClassVar[KiCadObjectType]
+    KOT_SCH_RULE_AREA: _ClassVar[KiCadObjectType]
+    KOT_PCB_POINT: _ClassVar[KiCadObjectType]
+    KOT_PCB_DRILL_CHART: _ClassVar[KiCadObjectType]
+    KOT_PCB_DRILL_MAP: _ClassVar[KiCadObjectType]
+    KOT_PCB_3D_BODY: _ClassVar[KiCadObjectType]
+    KOT_PCB_STACKUP_TABLE: _ClassVar[KiCadObjectType]
 
 class HorizontalAlignment(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -89,6 +97,18 @@ class Units(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     U_MILS: _ClassVar[Units]
     U_METERS: _ClassVar[Units]
     U_TENTHS: _ClassVar[Units]
+
+class PathType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PATH_UNKNOWN: _ClassVar[PathType]
+    PATH_USER_PLUGINS: _ClassVar[PathType]
+    PATH_USER_TEMPLATES: _ClassVar[PathType]
+    PATH_USER_SETTINGS: _ClassVar[PathType]
+    PATH_STOCK_SYMBOLS: _ClassVar[PathType]
+    PATH_STOCK_FOOTPRINTS: _ClassVar[PathType]
+    PATH_STOCK_DESIGN_BLOCKS: _ClassVar[PathType]
+    PATH_STOCK_3DMODELS: _ClassVar[PathType]
+    PATH_STOCK_TEMPLATES: _ClassVar[PathType]
 KOT_UNKNOWN: KiCadObjectType
 KOT_PCB_FOOTPRINT: KiCadObjectType
 KOT_PCB_PAD: KiCadObjectType
@@ -137,6 +157,14 @@ KOT_WSG_BITMAP: KiCadObjectType
 KOT_WSG_PAGE: KiCadObjectType
 KOT_SCH_GROUP: KiCadObjectType
 KOT_PCB_BARCODE: KiCadObjectType
+KOT_PCB_CONSTRAINT: KiCadObjectType
+KOT_PCB_GRIDITEM: KiCadObjectType
+KOT_SCH_RULE_AREA: KiCadObjectType
+KOT_PCB_POINT: KiCadObjectType
+KOT_PCB_DRILL_CHART: KiCadObjectType
+KOT_PCB_DRILL_MAP: KiCadObjectType
+KOT_PCB_3D_BODY: KiCadObjectType
+KOT_PCB_STACKUP_TABLE: KiCadObjectType
 HA_UNKNOWN: HorizontalAlignment
 HA_LEFT: HorizontalAlignment
 HA_CENTER: HorizontalAlignment
@@ -160,3 +188,12 @@ U_MM: Units
 U_MILS: Units
 U_METERS: Units
 U_TENTHS: Units
+PATH_UNKNOWN: PathType
+PATH_USER_PLUGINS: PathType
+PATH_USER_TEMPLATES: PathType
+PATH_USER_SETTINGS: PathType
+PATH_STOCK_SYMBOLS: PathType
+PATH_STOCK_FOOTPRINTS: PathType
+PATH_STOCK_DESIGN_BLOCKS: PathType
+PATH_STOCK_3DMODELS: PathType
+PATH_STOCK_TEMPLATES: PathType

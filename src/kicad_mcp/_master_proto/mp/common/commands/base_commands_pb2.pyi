@@ -1,4 +1,5 @@
 from mp.common.types import base_types_pb2 as _base_types_pb2
+from mp.common.types import enums_pb2 as _enums_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -77,3 +78,21 @@ class StringResponse(_message.Message):
     RESPONSE_FIELD_NUMBER: _ClassVar[int]
     response: str
     def __init__(self, response: _Optional[str] = ...) -> None: ...
+
+class GetPaths(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class PathEntry(_message.Message):
+    __slots__ = ("type", "path")
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    type: _enums_pb2.PathType
+    path: str
+    def __init__(self, type: _Optional[_Union[_enums_pb2.PathType, str]] = ..., path: _Optional[str] = ...) -> None: ...
+
+class GetPathsResponse(_message.Message):
+    __slots__ = ("paths",)
+    PATHS_FIELD_NUMBER: _ClassVar[int]
+    paths: _containers.RepeatedCompositeFieldContainer[PathEntry]
+    def __init__(self, paths: _Optional[_Iterable[_Union[PathEntry, _Mapping]]] = ...) -> None: ...

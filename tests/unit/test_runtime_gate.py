@@ -47,6 +47,12 @@ from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
     GetOpenDocumentsResponse,
     ItemCreationResult,
     ItemStatusCode,
+    ItemUpdateResult,
+    UpdateItems,
+    UpdateItemsResponse,
+)
+from kicad_mcp._master_proto.mp.common.commands.library_commands_pb2 import (
+    PlaceFromLibraryResponse,
 )
 from kicad_mcp._master_proto.mp.common.commands.project_commands_pb2 import (
     SaveDocument,
@@ -56,8 +62,7 @@ from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import (
     DocumentType,
 )
 from kicad_mcp._master_proto.mp.schematic.schematic_commands_pb2 import (
-    PlaceLibrarySymbol,
-    PlaceLibrarySymbolResponse,
+    PlaceSymbolFromLibrary,
 )
 from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
     GlobalLabel,
@@ -667,33 +672,57 @@ def test_schematic_ipc_required_error_carries_reason() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _place_response(kiid: str) -> PlaceLibrarySymbolResponse:
-    response = PlaceLibrarySymbolResponse()
-    response.placed.id.value = kiid
+def _place_response(
+    kiid: str = "KIID-xyz",
+    *,
+    reference: str = "R1",
+    value: str = "R",
+    footprint: str = "",
+) -> PlaceFromLibraryResponse:
+    placed = SchematicSymbolInstance()
+    placed.id.value = kiid
+    placed.reference_field.text.text = reference
+    placed.value_field.text.text = value
+    placed.footprint_field.text.text = footprint
+    response = PlaceFromLibraryResponse()
+    response.item.Pack(placed)
     return response
 
 
 def _open_place_client(
-    place_response: PlaceLibrarySymbolResponse | None = None,
+    place_response: PlaceFromLibraryResponse | None = None,
+    update_response: UpdateItemsResponse | None = None,
 ) -> FakeClient:
-    """Build a FakeClient that passes the gate and answers PlaceLibrarySymbol."""
+    """Build a FakeClient that passes the gate and answers PlaceSymbolFromLibrary."""
 
-    return FakeClient(
-        responses_by_cmd={
-            GetVersion: [_version_response("10.99.0-1059-g0895df3e3c")],
-            GetOpenDocuments: [
-                # Gate's _has_open_schematic probe.
-                _docs_response(["a.kicad_sch"]),
-                # Routing helper's own GetOpenDocuments call.
-                _docs_response(["a.kicad_sch"]),
-            ],
-            PlaceLibrarySymbol: [place_response or _place_response("KIID-xyz")],
-        }
-    )
+    responses: dict[type, list[Message]] = {
+        GetVersion: [_version_response("10.99.0-6510-ged2e743e11")],
+        GetOpenDocuments: [
+            # Gate's _has_open_schematic probe.
+            _docs_response(["a.kicad_sch"]),
+            # Routing helper's own GetOpenDocuments call.
+            _docs_response(["a.kicad_sch"]),
+        ],
+        PlaceSymbolFromLibrary: [place_response or _place_response()],
+    }
+    if update_response is not None:
+        responses[UpdateItems] = [update_response]
+    return FakeClient(responses_by_cmd=responses)
+
+
+def _sent(client: FakeClient, kind: type) -> list[Message]:
+    return [c for c, _ in client.sent if isinstance(c, kind)]
+
+
+def _updated_symbol(client: FakeClient) -> SchematicSymbolInstance:
+    (update,) = _sent(client, UpdateItems)
+    symbol = SchematicSymbolInstance()
+    assert update.items[0].Unpack(symbol)
+    return symbol
 
 
 def test_route_place_symbol_happy_path_returns_kiid_and_hint() -> None:
-    client = _open_place_client(_place_response("KIID-abc-123"))
+    client = _open_place_client(_place_response("KIID-abc-123", reference="R1"))
 
     result = route_schematic_place_symbol(
         library="Device",
@@ -707,11 +736,13 @@ def test_route_place_symbol_happy_path_returns_kiid_and_hint() -> None:
 
     assert isinstance(result, str)
     assert "KIID-abc-123" in result
+    assert "R1" in result
+    assert "10k" in result
     assert SCH_IPC_PERSISTENCE_HINT in result
-    # Sent commands include GetOpenDocuments(s) + PlaceLibrarySymbol.
     sent_kinds = [type(c) for c, _ in client.sent]
     assert GetOpenDocuments in sent_kinds
-    assert PlaceLibrarySymbol in sent_kinds
+    assert PlaceSymbolFromLibrary in sent_kinds
+    assert _updated_symbol(client).value_field.text.text == "10k"
 
 
 def test_route_place_symbol_raises_when_gate_closed() -> None:
@@ -727,12 +758,7 @@ def test_route_place_symbol_raises_when_gate_closed() -> None:
 
 
 def test_route_place_symbol_raises_when_no_schematic_open() -> None:
-    """Gate may pass _has_open_schematic but routing helper double-checks.
-
-    With ``has_open_doc=False`` the gate's _has_open_schematic probe
-    returns False, so check_ipc_gate raises first. The contract: closed
-    gate -> SchematicIPCRequiredError.
-    """
+    """With no open schematic the gate closes and the route raises."""
 
     factory = _build_factory(has_fix=True, has_open_doc=False)
     with pytest.raises(SchematicIPCRequiredError) as excinfo:
@@ -765,11 +791,11 @@ def test_route_place_symbol_orientation_maps_to_enum(degrees: int, expected_enum
         orientation_degrees=degrees,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
     assert place.orientation == expected_enum
 
 
-def test_route_place_symbol_invalid_orientation_raises_value_error() -> None:
+def test_route_place_symbol_invalid_orientation_raises_before_placing() -> None:
     client = _open_place_client()
     with pytest.raises(ValueError, match="orientation_degrees"):
         route_schematic_place_symbol(
@@ -780,9 +806,10 @@ def test_route_place_symbol_invalid_orientation_raises_value_error() -> None:
             orientation_degrees=45,
             kicad_factory=lambda: client,
         )
+    assert not _sent(client, PlaceSymbolFromLibrary)
 
 
-def test_route_place_symbol_mirror_flags_propagate() -> None:
+def test_route_place_symbol_mirror_flags_applied_by_update() -> None:
     client = _open_place_client()
     route_schematic_place_symbol(
         library="Device",
@@ -793,26 +820,177 @@ def test_route_place_symbol_mirror_flags_propagate() -> None:
         mirror_y=True,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
-    assert place.mirror_x is True
-    assert place.mirror_y is True
+    symbol = _updated_symbol(client)
+    assert symbol.transform.mirror_x is True
+    assert symbol.transform.mirror_y is True
+    assert symbol.id.value == "KIID-xyz"
 
 
-def test_route_place_symbol_mirror_defaults_false() -> None:
+def test_route_place_symbol_skips_update_when_nothing_differs() -> None:
+    client = _open_place_client(_place_response(value="GND"))
+    route_schematic_place_symbol(
+        library="power",
+        symbol_name="GND",
+        x_mm=0.0,
+        y_mm=0.0,
+        value="GND",
+        kicad_factory=lambda: client,
+    )
+    assert _sent(client, PlaceSymbolFromLibrary)
+    assert not _sent(client, UpdateItems)
+
+
+def test_route_place_symbol_footprint_applied_by_update() -> None:
     client = _open_place_client()
     route_schematic_place_symbol(
         library="Device",
         symbol_name="R",
         x_mm=0.0,
         y_mm=0.0,
+        footprint="Resistor_SMD:R_0603_1608Metric",
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
-    assert place.mirror_x is False
-    assert place.mirror_y is False
+    symbol = _updated_symbol(client)
+    assert symbol.footprint_field.text.text == "Resistor_SMD:R_0603_1608Metric"
+    assert symbol.value_field.text.text == "R"
 
 
-def test_route_place_symbol_reference_and_value_populate_when_set() -> None:
+def test_route_place_symbol_update_rejection_raises() -> None:
+    rejected = UpdateItemsResponse()
+    result = ItemUpdateResult()
+    result.status.code = ItemStatusCode.ISC_INVALID_DATA
+    result.status.error_message = "bad field"
+    rejected.updated_items.append(result)
+    client = _open_place_client(update_response=rejected)
+    with pytest.raises(ApiError, match="bad field"):
+        route_schematic_place_symbol(
+            library="Device",
+            symbol_name="R",
+            x_mm=0.0,
+            y_mm=0.0,
+            value="10k",
+            kicad_factory=lambda: client,
+        )
+
+
+def test_route_place_symbol_empty_response_raises() -> None:
+    client = _open_place_client(PlaceFromLibraryResponse())
+    with pytest.raises(ApiError, match="unpack"):
+        route_schematic_place_symbol(
+            library="Device",
+            symbol_name="R",
+            x_mm=0.0,
+            y_mm=0.0,
+            kicad_factory=lambda: client,
+        )
+
+
+class _NotFoundOnceClient(FakeClient):
+    """Fails the first PlaceSymbolFromLibrary with 'not found', then behaves normally."""
+
+    def __init__(
+        self,
+        *,
+        library_status: int,
+        load_error: Exception | None = None,
+        responses_by_cmd: dict[type, list[Message]] | None = None,
+    ) -> None:
+        super().__init__(responses_by_cmd=responses_by_cmd)
+        self._failed = False
+        self._library_status = library_status
+        self._load_error = load_error
+
+    def send(self, command, response_cls):  # type: ignore[no-untyped-def]  # noqa: ANN201
+        from kicad_mcp._master_proto.mp.common.commands.library_commands_pb2 import (
+            GetLibraryStatuses,
+            LibraryStatusResponse,
+            LoadAllLibraries,
+        )
+
+        if isinstance(command, PlaceSymbolFromLibrary) and not self._failed:
+            self._failed = True
+            self.sent.append((command, response_cls))
+            raise ApiError("KiCad returned error: symbol 'Device:R' not found")
+        if isinstance(command, LoadAllLibraries) and self._load_error is not None:
+            self.sent.append((command, response_cls))
+            raise self._load_error
+        if isinstance(command, GetLibraryStatuses):
+            self.sent.append((command, response_cls))
+            response = LibraryStatusResponse()
+            entry = response.libraries.add()
+            entry.entry.nickname = "Device"
+            entry.status = self._library_status
+            return response
+        return super().send(command, response_cls)
+
+
+def _not_found_once_client(
+    *, library_status: int, load_error: Exception | None = None
+) -> _NotFoundOnceClient:
+    return _NotFoundOnceClient(
+        library_status=library_status,
+        load_error=load_error,
+        responses_by_cmd={
+            GetVersion: [_version_response("10.99.0-6510-ged2e743e11")],
+            GetOpenDocuments: [_docs_response(["a.kicad_sch"]), _docs_response(["a.kicad_sch"])],
+            PlaceSymbolFromLibrary: [_place_response()],
+        },
+    )
+
+
+def test_route_place_symbol_loads_libraries_and_retries_when_not_found() -> None:
+    from kicad_mcp._master_proto.mp.common.commands.library_commands_pb2 import LoadAllLibraries
+    from kicad_mcp._master_proto.mp.common.types.library_types_pb2 import LLS_LOADED
+
+    client = _not_found_once_client(library_status=LLS_LOADED)
+    result = route_schematic_place_symbol(
+        library="Device", symbol_name="R", x_mm=0.0, y_mm=0.0, kicad_factory=lambda: client
+    )
+    assert "KIID-xyz" in result
+    assert _sent(client, LoadAllLibraries)
+    assert len(_sent(client, PlaceSymbolFromLibrary)) == 2
+
+
+def test_route_place_symbol_reraises_when_library_errors() -> None:
+    from kicad_mcp._master_proto.mp.common.types.library_types_pb2 import LLS_ERROR
+
+    client = _not_found_once_client(library_status=LLS_ERROR)
+    with pytest.raises(ApiError, match="not found"):
+        route_schematic_place_symbol(
+            library="Device", symbol_name="R", x_mm=0.0, y_mm=0.0, kicad_factory=lambda: client
+        )
+    assert len(_sent(client, PlaceSymbolFromLibrary)) == 1
+
+
+def test_route_place_symbol_reraises_when_libraries_cannot_load() -> None:
+    from kicad_mcp._master_proto.mp.common.types.library_types_pb2 import LLS_LOADED
+
+    client = _not_found_once_client(
+        library_status=LLS_LOADED,
+        load_error=ApiError("LoadAllLibraries is not available in GUI mode"),
+    )
+    with pytest.raises(ApiError, match="not found"):
+        route_schematic_place_symbol(
+            library="Device", symbol_name="R", x_mm=0.0, y_mm=0.0, kicad_factory=lambda: client
+        )
+    assert len(_sent(client, PlaceSymbolFromLibrary)) == 1
+
+
+def test_route_place_symbol_reraises_when_library_stays_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kicad_mcp._master_proto.mp.common.types.library_types_pb2 import LLS_INVALID
+
+    monkeypatch.setattr(runtime_gate, "LIBRARY_LOAD_TIMEOUT_S", 0.3)
+    client = _not_found_once_client(library_status=LLS_INVALID)
+    with pytest.raises(ApiError, match="not found"):
+        route_schematic_place_symbol(
+            library="Device", symbol_name="R", x_mm=0.0, y_mm=0.0, kicad_factory=lambda: client
+        )
+    assert len(_sent(client, PlaceSymbolFromLibrary)) == 1
+
+
+def test_route_place_symbol_reference_populates_when_set() -> None:
     client = _open_place_client()
     route_schematic_place_symbol(
         library="Device",
@@ -820,15 +998,13 @@ def test_route_place_symbol_reference_and_value_populate_when_set() -> None:
         x_mm=0.0,
         y_mm=0.0,
         reference="R42",
-        value="4.7k",
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
     assert place.reference == "R42"
-    assert place.value == "4.7k"
 
 
-def test_route_place_symbol_reference_and_value_blank_when_omitted() -> None:
+def test_route_place_symbol_reference_blank_when_omitted() -> None:
     client = _open_place_client()
     route_schematic_place_symbol(
         library="Device",
@@ -837,10 +1013,8 @@ def test_route_place_symbol_reference_and_value_blank_when_omitted() -> None:
         y_mm=0.0,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
-    # Proto string defaults are empty when not set.
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
     assert place.reference == ""
-    assert place.value == ""
 
 
 def test_route_place_symbol_unit_propagates_when_gt_one() -> None:
@@ -853,13 +1027,12 @@ def test_route_place_symbol_unit_propagates_when_gt_one() -> None:
         unit=3,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
-    assert place.unit == 3
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
+    assert place.HasField("unit")
+    assert place.unit.unit == 3
 
 
-def test_route_place_symbol_unit_one_leaves_proto_default() -> None:
-    """``unit=1`` should NOT set the field — preserves "if unit and unit > 1"."""
-
+def test_route_place_symbol_unit_one_leaves_unit_unset() -> None:
     client = _open_place_client()
     route_schematic_place_symbol(
         library="Device",
@@ -869,9 +1042,8 @@ def test_route_place_symbol_unit_one_leaves_proto_default() -> None:
         unit=1,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
-    # Proto int default is 0 when the field is never assigned.
-    assert place.unit == 0
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
+    assert not place.HasField("unit")
 
 
 def test_route_place_symbol_position_converts_mm_to_nm() -> None:
@@ -883,11 +1055,12 @@ def test_route_place_symbol_position_converts_mm_to_nm() -> None:
         y_mm=-25.4,
         kicad_factory=lambda: client,
     )
-    place = next(c for c, _ in client.sent if isinstance(c, PlaceLibrarySymbol))
+    (place,) = _sent(client, PlaceSymbolFromLibrary)
     assert place.position.x_nm == 12_700_000
     assert place.position.y_nm == -25_400_000
-    assert place.id.library_nickname == "Device"
-    assert place.id.entry_name == "R"
+    assert place.lib_id.library_nickname == "Device"
+    assert place.lib_id.entry_name == "R"
+    assert place.header.document.type == DocumentType.DOCTYPE_SCHEMATIC
 
 
 # ---------------------------------------------------------------------------

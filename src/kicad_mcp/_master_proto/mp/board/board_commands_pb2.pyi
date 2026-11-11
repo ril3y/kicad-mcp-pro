@@ -1,8 +1,13 @@
 from mp.common.types import base_types_pb2 as _base_types_pb2
+from mp.common.types import embedded_files_pb2 as _embedded_files_pb2
+from google.protobuf import any_pb2 as _any_pb2
 from mp.common.types import enums_pb2 as _enums_pb2
 from mp.common.types import project_settings_pb2 as _project_settings_pb2
 from mp.board import board_pb2 as _board_pb2
+from mp.board import board_rules_pb2 as _board_rules_pb2
 from mp.board import board_types_pb2 as _board_types_pb2
+from mp.board import board_jobs_pb2 as _board_jobs_pb2
+from mp.common.commands import editor_commands_pb2 as _editor_commands_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -23,6 +28,12 @@ class BoardOriginType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BOT_UNKNOWN: _ClassVar[BoardOriginType]
     BOT_GRID: _ClassVar[BoardOriginType]
     BOT_DRILL: _ClassVar[BoardOriginType]
+
+class NetlistMatchMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    NMM_UNKNOWN: _ClassVar[NetlistMatchMode]
+    NMM_UUID: _ClassVar[NetlistMatchMode]
+    NMM_REFERENCE: _ClassVar[NetlistMatchMode]
 
 class PadstackPresence(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -67,6 +78,19 @@ class RatsnestDisplayMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     RDM_UNKNOWN: _ClassVar[RatsnestDisplayMode]
     RDM_ALL_LAYERS: _ClassVar[RatsnestDisplayMode]
     RDM_VISIBLE_LAYERS: _ClassVar[RatsnestDisplayMode]
+
+class BoardFlipDirection(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BFD_UNKNOWN: _ClassVar[BoardFlipDirection]
+    BFD_LEFT_RIGHT: _ClassVar[BoardFlipDirection]
+    BFD_TOP_BOTTOM: _ClassVar[BoardFlipDirection]
+
+class BoardBoundingBoxMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BBBM_UNKNOWN: _ClassVar[BoardBoundingBoxMode]
+    BBBM_ALL_ITEMS: _ClassVar[BoardBoundingBoxMode]
+    BBBM_PHYSICAL_LAYERS_ONLY: _ClassVar[BoardBoundingBoxMode]
+    BBBM_BOARD_EDGES_ONLY: _ClassVar[BoardBoundingBoxMode]
 CRS_UNKNOWN: CustomRulesStatus
 CRS_NONE: CustomRulesStatus
 CRS_VALID: CustomRulesStatus
@@ -74,6 +98,9 @@ CRS_INVALID: CustomRulesStatus
 BOT_UNKNOWN: BoardOriginType
 BOT_GRID: BoardOriginType
 BOT_DRILL: BoardOriginType
+NMM_UNKNOWN: NetlistMatchMode
+NMM_UUID: NetlistMatchMode
+NMM_REFERENCE: NetlistMatchMode
 PSP_UNKNOWN: PadstackPresence
 PSP_PRESENT: PadstackPresence
 PSP_NOT_PRESENT: PadstackPresence
@@ -100,6 +127,13 @@ BFM_FLIPPED_X: BoardFlipMode
 RDM_UNKNOWN: RatsnestDisplayMode
 RDM_ALL_LAYERS: RatsnestDisplayMode
 RDM_VISIBLE_LAYERS: RatsnestDisplayMode
+BFD_UNKNOWN: BoardFlipDirection
+BFD_LEFT_RIGHT: BoardFlipDirection
+BFD_TOP_BOTTOM: BoardFlipDirection
+BBBM_UNKNOWN: BoardBoundingBoxMode
+BBBM_ALL_ITEMS: BoardBoundingBoxMode
+BBBM_PHYSICAL_LAYERS_ONLY: BoardBoundingBoxMode
+BBBM_BOARD_EDGES_ONLY: BoardBoundingBoxMode
 
 class GetBoardStackup(_message.Message):
     __slots__ = ("board",)
@@ -145,6 +179,28 @@ class SetBoardEnabledLayers(_message.Message):
     layers: _containers.RepeatedScalarFieldContainer[_board_types_pb2.BoardLayer]
     def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., copper_layer_count: _Optional[int] = ..., layers: _Optional[_Iterable[_Union[_board_types_pb2.BoardLayer, str]]] = ...) -> None: ...
 
+class GetEmbeddedFiles(_message.Message):
+    __slots__ = ("board",)
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ...) -> None: ...
+
+class AddEmbeddedFiles(_message.Message):
+    __slots__ = ("board", "files")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    files: _embedded_files_pb2.EmbeddedFiles
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., files: _Optional[_Union[_embedded_files_pb2.EmbeddedFiles, _Mapping]] = ...) -> None: ...
+
+class SetEmbeddedFiles(_message.Message):
+    __slots__ = ("board", "files")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    files: _embedded_files_pb2.EmbeddedFiles
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., files: _Optional[_Union[_embedded_files_pb2.EmbeddedFiles, _Mapping]] = ...) -> None: ...
+
 class GetGraphicsDefaults(_message.Message):
     __slots__ = ("board",)
     BOARD_FIELD_NUMBER: _ClassVar[int]
@@ -168,16 +224,16 @@ class SetBoardDesignRules(_message.Message):
     BOARD_FIELD_NUMBER: _ClassVar[int]
     RULES_FIELD_NUMBER: _ClassVar[int]
     board: _base_types_pb2.DocumentSpecifier
-    rules: _board_pb2.BoardDesignRules
-    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., rules: _Optional[_Union[_board_pb2.BoardDesignRules, _Mapping]] = ...) -> None: ...
+    rules: _board_rules_pb2.BoardDesignRules
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., rules: _Optional[_Union[_board_rules_pb2.BoardDesignRules, _Mapping]] = ...) -> None: ...
 
 class BoardDesignRulesResponse(_message.Message):
     __slots__ = ("rules", "custom_rules_status")
     RULES_FIELD_NUMBER: _ClassVar[int]
     CUSTOM_RULES_STATUS_FIELD_NUMBER: _ClassVar[int]
-    rules: _board_pb2.BoardDesignRules
+    rules: _board_rules_pb2.BoardDesignRules
     custom_rules_status: CustomRulesStatus
-    def __init__(self, rules: _Optional[_Union[_board_pb2.BoardDesignRules, _Mapping]] = ..., custom_rules_status: _Optional[_Union[CustomRulesStatus, str]] = ...) -> None: ...
+    def __init__(self, rules: _Optional[_Union[_board_rules_pb2.BoardDesignRules, _Mapping]] = ..., custom_rules_status: _Optional[_Union[CustomRulesStatus, str]] = ...) -> None: ...
 
 class GetCustomDesignRules(_message.Message):
     __slots__ = ("board",)
@@ -190,8 +246,8 @@ class SetCustomDesignRules(_message.Message):
     BOARD_FIELD_NUMBER: _ClassVar[int]
     RULES_FIELD_NUMBER: _ClassVar[int]
     board: _base_types_pb2.DocumentSpecifier
-    rules: _containers.RepeatedCompositeFieldContainer[_board_pb2.CustomRule]
-    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., rules: _Optional[_Iterable[_Union[_board_pb2.CustomRule, _Mapping]]] = ...) -> None: ...
+    rules: _containers.RepeatedCompositeFieldContainer[_board_rules_pb2.CustomRule]
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., rules: _Optional[_Iterable[_Union[_board_rules_pb2.CustomRule, _Mapping]]] = ...) -> None: ...
 
 class CustomRulesResponse(_message.Message):
     __slots__ = ("status", "rules", "error_text")
@@ -199,9 +255,9 @@ class CustomRulesResponse(_message.Message):
     RULES_FIELD_NUMBER: _ClassVar[int]
     ERROR_TEXT_FIELD_NUMBER: _ClassVar[int]
     status: CustomRulesStatus
-    rules: _containers.RepeatedCompositeFieldContainer[_board_pb2.CustomRule]
+    rules: _containers.RepeatedCompositeFieldContainer[_board_rules_pb2.CustomRule]
     error_text: str
-    def __init__(self, status: _Optional[_Union[CustomRulesStatus, str]] = ..., rules: _Optional[_Iterable[_Union[_board_pb2.CustomRule, _Mapping]]] = ..., error_text: _Optional[str] = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[CustomRulesStatus, str]] = ..., rules: _Optional[_Iterable[_Union[_board_rules_pb2.CustomRule, _Mapping]]] = ..., error_text: _Optional[str] = ...) -> None: ...
 
 class GetBoardOrigin(_message.Message):
     __slots__ = ("board", "type")
@@ -234,6 +290,14 @@ class BoardLayerNameResponse(_message.Message):
     NAME_FIELD_NUMBER: _ClassVar[int]
     name: str
     def __init__(self, name: _Optional[str] = ...) -> None: ...
+
+class GetBoardLayerByName(_message.Message):
+    __slots__ = ("board", "name")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    name: str
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., name: _Optional[str] = ...) -> None: ...
 
 class GetNets(_message.Message):
     __slots__ = ("board", "netclass_filter")
@@ -297,6 +361,54 @@ class NetClassForNetsResponse(_message.Message):
     CLASSES_FIELD_NUMBER: _ClassVar[int]
     classes: _containers.MessageMap[str, _project_settings_pb2.NetClass]
     def __init__(self, classes: _Optional[_Mapping[str, _project_settings_pb2.NetClass]] = ...) -> None: ...
+
+class ImportNetlist(_message.Message):
+    __slots__ = ("board", "netlist_path", "dry_run", "match_mode", "delete_extra_footprints", "update_footprints", "transfer_groups", "override_locks")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    NETLIST_PATH_FIELD_NUMBER: _ClassVar[int]
+    DRY_RUN_FIELD_NUMBER: _ClassVar[int]
+    MATCH_MODE_FIELD_NUMBER: _ClassVar[int]
+    DELETE_EXTRA_FOOTPRINTS_FIELD_NUMBER: _ClassVar[int]
+    UPDATE_FOOTPRINTS_FIELD_NUMBER: _ClassVar[int]
+    TRANSFER_GROUPS_FIELD_NUMBER: _ClassVar[int]
+    OVERRIDE_LOCKS_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    netlist_path: str
+    dry_run: bool
+    match_mode: NetlistMatchMode
+    delete_extra_footprints: bool
+    update_footprints: bool
+    transfer_groups: bool
+    override_locks: bool
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., netlist_path: _Optional[str] = ..., dry_run: bool = ..., match_mode: _Optional[_Union[NetlistMatchMode, str]] = ..., delete_extra_footprints: bool = ..., update_footprints: bool = ..., transfer_groups: bool = ..., override_locks: bool = ...) -> None: ...
+
+class ImportNetlistResponse(_message.Message):
+    __slots__ = ("error_count", "warning_count", "new_footprint_count", "report")
+    ERROR_COUNT_FIELD_NUMBER: _ClassVar[int]
+    WARNING_COUNT_FIELD_NUMBER: _ClassVar[int]
+    NEW_FOOTPRINT_COUNT_FIELD_NUMBER: _ClassVar[int]
+    REPORT_FIELD_NUMBER: _ClassVar[int]
+    error_count: int
+    warning_count: int
+    new_footprint_count: int
+    report: str
+    def __init__(self, error_count: _Optional[int] = ..., warning_count: _Optional[int] = ..., new_footprint_count: _Optional[int] = ..., report: _Optional[str] = ...) -> None: ...
+
+class ImportSpecctraSession(_message.Message):
+    __slots__ = ("board", "session_path")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    SESSION_PATH_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    session_path: str
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., session_path: _Optional[str] = ...) -> None: ...
+
+class ImportSpecctraSessionResponse(_message.Message):
+    __slots__ = ("skipped_count", "report")
+    SKIPPED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    REPORT_FIELD_NUMBER: _ClassVar[int]
+    skipped_count: int
+    report: str
+    def __init__(self, skipped_count: _Optional[int] = ..., report: _Optional[str] = ...) -> None: ...
 
 class RefillZones(_message.Message):
     __slots__ = ("board", "zones")
@@ -432,6 +544,82 @@ class SetBoardEditorAppearanceSettings(_message.Message):
     settings: BoardEditorAppearanceSettings
     def __init__(self, settings: _Optional[_Union[BoardEditorAppearanceSettings, _Mapping]] = ...) -> None: ...
 
+class GetBoardPlotSettings(_message.Message):
+    __slots__ = ("board",)
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ...) -> None: ...
+
+class SetBoardPlotSettings(_message.Message):
+    __slots__ = ("board", "plot_settings")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    PLOT_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    plot_settings: _board_jobs_pb2.BoardPlotSettings
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., plot_settings: _Optional[_Union[_board_jobs_pb2.BoardPlotSettings, _Mapping]] = ...) -> None: ...
+
+class BoardPlotSettingsResponse(_message.Message):
+    __slots__ = ("plot_settings",)
+    PLOT_SETTINGS_FIELD_NUMBER: _ClassVar[int]
+    plot_settings: _board_jobs_pb2.BoardPlotSettings
+    def __init__(self, plot_settings: _Optional[_Union[_board_jobs_pb2.BoardPlotSettings, _Mapping]] = ...) -> None: ...
+
+class FlipItems(_message.Message):
+    __slots__ = ("header", "items", "direction")
+    HEADER_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    DIRECTION_FIELD_NUMBER: _ClassVar[int]
+    header: _base_types_pb2.ItemHeader
+    items: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.KIID]
+    direction: BoardFlipDirection
+    def __init__(self, header: _Optional[_Union[_base_types_pb2.ItemHeader, _Mapping]] = ..., items: _Optional[_Iterable[_Union[_base_types_pb2.KIID, _Mapping]]] = ..., direction: _Optional[_Union[BoardFlipDirection, str]] = ...) -> None: ...
+
+class ItemFlipResult(_message.Message):
+    __slots__ = ("status", "item")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ITEM_FIELD_NUMBER: _ClassVar[int]
+    status: _editor_commands_pb2.ItemStatus
+    item: _any_pb2.Any
+    def __init__(self, status: _Optional[_Union[_editor_commands_pb2.ItemStatus, _Mapping]] = ..., item: _Optional[_Union[_any_pb2.Any, _Mapping]] = ...) -> None: ...
+
+class FlipItemsResponse(_message.Message):
+    __slots__ = ("header", "status", "flipped_items")
+    HEADER_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    FLIPPED_ITEMS_FIELD_NUMBER: _ClassVar[int]
+    header: _base_types_pb2.ItemHeader
+    status: _base_types_pb2.ItemRequestStatus
+    flipped_items: _containers.RepeatedCompositeFieldContainer[ItemFlipResult]
+    def __init__(self, header: _Optional[_Union[_base_types_pb2.ItemHeader, _Mapping]] = ..., status: _Optional[_Union[_base_types_pb2.ItemRequestStatus, str]] = ..., flipped_items: _Optional[_Iterable[_Union[ItemFlipResult, _Mapping]]] = ...) -> None: ...
+
+class PlaceFootprintFromLibrary(_message.Message):
+    __slots__ = ("header", "lib_id", "position", "orientation", "layer")
+    HEADER_FIELD_NUMBER: _ClassVar[int]
+    LIB_ID_FIELD_NUMBER: _ClassVar[int]
+    POSITION_FIELD_NUMBER: _ClassVar[int]
+    ORIENTATION_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    header: _base_types_pb2.ItemHeader
+    lib_id: _base_types_pb2.LibraryIdentifier
+    position: _base_types_pb2.Vector2
+    orientation: _base_types_pb2.Angle
+    layer: _board_types_pb2.BoardLayer
+    def __init__(self, header: _Optional[_Union[_base_types_pb2.ItemHeader, _Mapping]] = ..., lib_id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., orientation: _Optional[_Union[_base_types_pb2.Angle, _Mapping]] = ..., layer: _Optional[_Union[_board_types_pb2.BoardLayer, str]] = ...) -> None: ...
+
+class GetBoardBoundingBox(_message.Message):
+    __slots__ = ("board", "mode")
+    BOARD_FIELD_NUMBER: _ClassVar[int]
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    board: _base_types_pb2.DocumentSpecifier
+    mode: BoardBoundingBoxMode
+    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., mode: _Optional[_Union[BoardBoundingBoxMode, str]] = ...) -> None: ...
+
+class BoardBoundingBoxResponse(_message.Message):
+    __slots__ = ("box",)
+    BOX_FIELD_NUMBER: _ClassVar[int]
+    box: _base_types_pb2.Box2
+    def __init__(self, box: _Optional[_Union[_base_types_pb2.Box2, _Mapping]] = ...) -> None: ...
+
 class InteractiveMoveItems(_message.Message):
     __slots__ = ("board", "items")
     BOARD_FIELD_NUMBER: _ClassVar[int]
@@ -439,73 +627,3 @@ class InteractiveMoveItems(_message.Message):
     board: _base_types_pb2.DocumentSpecifier
     items: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.KIID]
     def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., items: _Optional[_Iterable[_Union[_base_types_pb2.KIID, _Mapping]]] = ...) -> None: ...
-
-class FootprintLibraryInfo(_message.Message):
-    __slots__ = ("nickname", "uri", "description", "enabled", "type")
-    NICKNAME_FIELD_NUMBER: _ClassVar[int]
-    URI_FIELD_NUMBER: _ClassVar[int]
-    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
-    ENABLED_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    nickname: str
-    uri: str
-    description: str
-    enabled: bool
-    type: str
-    def __init__(self, nickname: _Optional[str] = ..., uri: _Optional[str] = ..., description: _Optional[str] = ..., enabled: bool = ..., type: _Optional[str] = ...) -> None: ...
-
-class ListFootprintLibraries(_message.Message):
-    __slots__ = ("board", "include_disabled")
-    BOARD_FIELD_NUMBER: _ClassVar[int]
-    INCLUDE_DISABLED_FIELD_NUMBER: _ClassVar[int]
-    board: _base_types_pb2.DocumentSpecifier
-    include_disabled: bool
-    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., include_disabled: bool = ...) -> None: ...
-
-class ListFootprintLibrariesResponse(_message.Message):
-    __slots__ = ("libraries",)
-    LIBRARIES_FIELD_NUMBER: _ClassVar[int]
-    libraries: _containers.RepeatedCompositeFieldContainer[FootprintLibraryInfo]
-    def __init__(self, libraries: _Optional[_Iterable[_Union[FootprintLibraryInfo, _Mapping]]] = ...) -> None: ...
-
-class LibraryFootprintMatch(_message.Message):
-    __slots__ = ("id", "description", "keywords")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
-    KEYWORDS_FIELD_NUMBER: _ClassVar[int]
-    id: _base_types_pb2.LibraryIdentifier
-    description: str
-    keywords: str
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., description: _Optional[str] = ..., keywords: _Optional[str] = ...) -> None: ...
-
-class SearchFootprintLibraries(_message.Message):
-    __slots__ = ("board", "query", "library_nicknames", "max_results")
-    BOARD_FIELD_NUMBER: _ClassVar[int]
-    QUERY_FIELD_NUMBER: _ClassVar[int]
-    LIBRARY_NICKNAMES_FIELD_NUMBER: _ClassVar[int]
-    MAX_RESULTS_FIELD_NUMBER: _ClassVar[int]
-    board: _base_types_pb2.DocumentSpecifier
-    query: str
-    library_nicknames: _containers.RepeatedScalarFieldContainer[str]
-    max_results: int
-    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., query: _Optional[str] = ..., library_nicknames: _Optional[_Iterable[str]] = ..., max_results: _Optional[int] = ...) -> None: ...
-
-class SearchFootprintLibrariesResponse(_message.Message):
-    __slots__ = ("matches",)
-    MATCHES_FIELD_NUMBER: _ClassVar[int]
-    matches: _containers.RepeatedCompositeFieldContainer[LibraryFootprintMatch]
-    def __init__(self, matches: _Optional[_Iterable[_Union[LibraryFootprintMatch, _Mapping]]] = ...) -> None: ...
-
-class GetLibraryFootprint(_message.Message):
-    __slots__ = ("board", "id")
-    BOARD_FIELD_NUMBER: _ClassVar[int]
-    ID_FIELD_NUMBER: _ClassVar[int]
-    board: _base_types_pb2.DocumentSpecifier
-    id: _base_types_pb2.LibraryIdentifier
-    def __init__(self, board: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ...) -> None: ...
-
-class GetLibraryFootprintResponse(_message.Message):
-    __slots__ = ("footprint",)
-    FOOTPRINT_FIELD_NUMBER: _ClassVar[int]
-    footprint: _board_types_pb2.Footprint
-    def __init__(self, footprint: _Optional[_Union[_board_types_pb2.Footprint, _Mapping]] = ...) -> None: ...

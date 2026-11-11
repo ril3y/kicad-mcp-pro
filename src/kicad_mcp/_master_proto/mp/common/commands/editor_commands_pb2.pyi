@@ -9,6 +9,12 @@ from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Map
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class DocumentModifiedState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    DMS_UNKNOWN: _ClassVar[DocumentModifiedState]
+    DMS_UNMODIFIED: _ClassVar[DocumentModifiedState]
+    DMS_MODIFIED: _ClassVar[DocumentModifiedState]
+
 class RunActionStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     RAS_UNKNOWN: _ClassVar[RunActionStatus]
@@ -50,6 +56,9 @@ class HitTestResult(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     HTR_UNKNOWN: _ClassVar[HitTestResult]
     HTR_NO_HIT: _ClassVar[HitTestResult]
     HTR_HIT: _ClassVar[HitTestResult]
+DMS_UNKNOWN: DocumentModifiedState
+DMS_UNMODIFIED: DocumentModifiedState
+DMS_MODIFIED: DocumentModifiedState
 RAS_UNKNOWN: RunActionStatus
 RAS_OK: RunActionStatus
 RAS_INVALID: RunActionStatus
@@ -81,6 +90,14 @@ class RefreshEditor(_message.Message):
     frame: _base_types_pb2.FrameType
     def __init__(self, frame: _Optional[_Union[_base_types_pb2.FrameType, str]] = ...) -> None: ...
 
+class OpenLibraryItem(_message.Message):
+    __slots__ = ("type", "identifier")
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    IDENTIFIER_FIELD_NUMBER: _ClassVar[int]
+    type: _base_types_pb2.DocumentType
+    identifier: _base_types_pb2.LibraryIdentifier
+    def __init__(self, type: _Optional[_Union[_base_types_pb2.DocumentType, str]] = ..., identifier: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ...) -> None: ...
+
 class GetOpenDocuments(_message.Message):
     __slots__ = ("type",)
     TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -92,6 +109,26 @@ class GetOpenDocumentsResponse(_message.Message):
     DOCUMENTS_FIELD_NUMBER: _ClassVar[int]
     documents: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.DocumentSpecifier]
     def __init__(self, documents: _Optional[_Iterable[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]]] = ...) -> None: ...
+
+class GetDocumentModifiedState(_message.Message):
+    __slots__ = ("document",)
+    DOCUMENT_FIELD_NUMBER: _ClassVar[int]
+    document: _base_types_pb2.DocumentSpecifier
+    def __init__(self, document: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ...) -> None: ...
+
+class GetDocumentModifiedStateResponse(_message.Message):
+    __slots__ = ("state",)
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    state: DocumentModifiedState
+    def __init__(self, state: _Optional[_Union[DocumentModifiedState, str]] = ...) -> None: ...
+
+class SaveDocumentAs(_message.Message):
+    __slots__ = ("document", "path")
+    DOCUMENT_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    document: _base_types_pb2.DocumentSpecifier
+    path: str
+    def __init__(self, document: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., path: _Optional[str] = ...) -> None: ...
 
 class SaveOptions(_message.Message):
     __slots__ = ("overwrite", "include_project")
@@ -324,6 +361,16 @@ class ClearSelection(_message.Message):
     HEADER_FIELD_NUMBER: _ClassVar[int]
     header: _base_types_pb2.ItemHeader
     def __init__(self, header: _Optional[_Union[_base_types_pb2.ItemHeader, _Mapping]] = ...) -> None: ...
+
+class FocusOnItems(_message.Message):
+    __slots__ = ("document", "items", "margin")
+    DOCUMENT_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    MARGIN_FIELD_NUMBER: _ClassVar[int]
+    document: _base_types_pb2.DocumentSpecifier
+    items: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.KIID]
+    margin: _base_types_pb2.Distance
+    def __init__(self, document: _Optional[_Union[_base_types_pb2.DocumentSpecifier, _Mapping]] = ..., items: _Optional[_Iterable[_Union[_base_types_pb2.KIID, _Mapping]]] = ..., margin: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ...) -> None: ...
 
 class HitTest(_message.Message):
     __slots__ = ("header", "id", "position", "tolerance")

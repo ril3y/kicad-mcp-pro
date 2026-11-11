@@ -10,12 +10,12 @@
 Talks to eeschema via the IPC `CreateItems` / `UpdateItems` / `SaveDocument`
 flow using the *master KiCad* proto field layouts. Vendored stubs live in
 :mod:`kicad_mcp._master_proto` (regenerated from
-`X:/Projects/kicad-source/api/proto/` against master).
+KiCad master's `api/proto/` by `scripts/regen_master_proto.py`).
 
 Why we don't reuse :mod:`kipy`
 -----------------------------
 
-kipy 0.7.1 ships older schematic proto stubs whose field shape doesn't
+kipy releases ship older schematic proto stubs whose field shape doesn't
 match KiCad master's wire format:
 
 * kipy: ``GlobalLabel.text -> schematic_types.Text -> base_types.Text``

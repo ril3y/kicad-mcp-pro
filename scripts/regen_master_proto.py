@@ -19,7 +19,9 @@ The vendoring scheme:
     pool that doesn't pollute kipy's default pool.
 
 Usage:
-    uv run python scripts/regen_master_proto.py
+    python scripts/regen_master_proto.py /path/to/kicad-source/api/proto
+
+The proto directory can also come from ``KICAD_PROTO_DIR``.
 
 Requires a tempvenv with grpcio-tools installed (this script bootstraps
 one if absent so it never touches the project's running venv, which is
@@ -32,6 +34,7 @@ landed.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import shutil
@@ -40,7 +43,6 @@ import sys
 import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-KICAD_SOURCE_PROTO = pathlib.Path(r"X:\Projects\kicad-source\api\proto")
 DEST_TREE = REPO_ROOT / "src" / "kicad_mcp" / "_master_proto" / "mp"
 
 IMPORT_REWRITE = re.compile(r'^import "((?:common|schematic|board)/)', re.M)
@@ -54,21 +56,26 @@ def _bootstrap_protoc_venv() -> pathlib.Path:
     `ValidateProtobufRuntimeVersion`.
     """
     venv_dir = pathlib.Path(tempfile.gettempdir()) / "kicad_mcp_protoc_venv"
-    python = venv_dir / "Scripts" / "python.exe"
+    if os.name == "nt":
+        python = venv_dir / "Scripts" / "python.exe"
+    else:
+        python = venv_dir / "bin" / "python"
     if not python.exists():
-        uv = shutil.which("uv") or r"C:\Users\riley\.local\bin\uv.exe"
-        subprocess.run([uv, "venv", "--python", "3.12", str(venv_dir)], check=True)
+        uv = shutil.which("uv")
+        if not uv:
+            sys.exit("uv is required to bootstrap the protoc venv")
+        subprocess.run([uv, "venv", "--no-config", "--python", "3.12", str(venv_dir)], check=True)
         subprocess.run(
-            [uv, "pip", "install", "--python", str(python), "grpcio-tools", "protobuf>=5.27,<6"],
+            [uv, "pip", "install", "--no-config", "--python", str(python), "grpcio-tools", "protobuf>=5.27,<6"],
             check=True,
         )
     return python
 
 
-def _stage_protos(staging: pathlib.Path) -> None:
+def _stage_protos(source: pathlib.Path, staging: pathlib.Path) -> None:
     target = staging / "mp"
     target.mkdir(parents=True, exist_ok=True)
-    for src in KICAD_SOURCE_PROTO.iterdir():
+    for src in source.iterdir():
         dst = target / src.name
         if src.is_dir():
             if dst.exists():
@@ -116,25 +123,33 @@ def _patch_shared_pool(generated: pathlib.Path) -> None:
 
 
 def _install(generated: pathlib.Path) -> None:
-    """Mirror generated files into the vendored tree, preserving __init__ scaffolding."""
+    """Replace the generated files in the vendored tree, preserving __init__ scaffolding."""
+    for stale in [*DEST_TREE.rglob("*_pb2.py"), *DEST_TREE.rglob("*_pb2.pyi")]:
+        stale.unlink()
     src_root = generated / "mp"
     for src in src_root.rglob("*"):
         if src.is_dir():
             continue
         rel = src.relative_to(src_root)
         dst = DEST_TREE / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.parent.exists():
+            dst.parent.mkdir(parents=True)
+            (dst.parent / "__init__.py").touch()
         shutil.copy2(src, dst)
 
 
 def main() -> None:
-    if not KICAD_SOURCE_PROTO.is_dir():
-        sys.exit(f"kicad-source proto tree not found at {KICAD_SOURCE_PROTO}")
+    arg = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("KICAD_PROTO_DIR", "")
+    if not arg:
+        sys.exit("usage: regen_master_proto.py /path/to/kicad-source/api/proto")
+    source = pathlib.Path(arg).expanduser().resolve()
+    if not source.is_dir():
+        sys.exit(f"kicad-source proto tree not found at {source}")
     python = _bootstrap_protoc_venv()
     with tempfile.TemporaryDirectory(prefix="kicad_mcp_proto_") as tmp:
         staging = pathlib.Path(tmp) / "src"
         out = pathlib.Path(tmp) / "out"
-        _stage_protos(staging)
+        _stage_protos(source, staging)
         _run_protoc(python, staging, out)
         _patch_shared_pool(out)
         _install(out)

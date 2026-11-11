@@ -1,6 +1,6 @@
 """Isolated descriptor pool for master KiCad protos.
 
-kipy 0.7.1 registers its proto descriptors in the global default pool
+kipy registers its proto descriptors in the global default pool
 via ``_descriptor_pool.Default()``. Our master-aligned regenerated stubs
 use the same protobuf package names (``kiapi.common.*`` etc.) and would
 collide on symbols like ``kiapi.common.ApiStatusCode``. We give them a

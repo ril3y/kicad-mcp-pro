@@ -3,7 +3,7 @@
 We can't reuse :mod:`kipy.client` here because it imports kipy's own
 proto descriptors at module load, and those collide with the
 :mod:`kicad_mcp._master_proto` descriptors (same proto file paths,
-different field structures — kipy 0.7.1 lags master KiCad's wire
+different field structures — kipy releases lag master KiCad's wire
 format). Loading both raises ``duplicate file name`` in the protobuf
 descriptor pool.
 

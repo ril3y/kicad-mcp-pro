@@ -503,6 +503,56 @@ def route_schematic_create(
     return f"Added {len(items)} schematic item(s) via IPC. {SCH_IPC_PERSISTENCE_HINT}"
 
 
+LIBRARY_LOAD_TIMEOUT_S = 30.0
+
+
+def _load_symbol_library(client: Any, nickname: str) -> bool:  # noqa: ANN401
+    """Ask KiCad to load its symbol libraries and wait until ``nickname`` is ready.
+
+    The headless ``kicad-cli api-server`` loads no libraries until asked; the
+    GUI loads them in the background at startup. The load runs asynchronously,
+    so this polls until the library is loaded. Returns ``False`` when KiCad
+    can't do this, the library isn't in its tables, or it doesn't load within
+    :data:`LIBRARY_LOAD_TIMEOUT_S`.
+    """
+
+    import time
+
+    from kicad_mcp._master_proto.mp.common.commands.library_commands_pb2 import (
+        GetLibraryStatuses,
+        LibraryStatusResponse,
+        LoadAllLibraries,
+    )
+    from kicad_mcp._master_proto.mp.common.types.library_types_pb2 import (
+        LLS_ERROR,
+        LLS_LOADED,
+        LT_SYMBOL,
+        LTS_BOTH,
+        LibraryCommandStatus,
+    )
+
+    from ._master_client import ApiError
+
+    load = LoadAllLibraries()
+    load.type.append(LT_SYMBOL)
+    query = GetLibraryStatuses()
+    query.types.append(LT_SYMBOL)
+    query.scope = LTS_BOTH
+    try:
+        client.send(load, LibraryCommandStatus)
+        deadline = time.monotonic() + LIBRARY_LOAD_TIMEOUT_S
+        while True:
+            statuses = client.send(query, LibraryStatusResponse).libraries
+            status = next((e.status for e in statuses if e.entry.nickname == nickname), None)
+            if status == LLS_LOADED:
+                return True
+            if status in (None, LLS_ERROR) or time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+    except ApiError:
+        return False
+
+
 def route_schematic_place_symbol(
     *,
     library: str,
@@ -511,28 +561,42 @@ def route_schematic_place_symbol(
     y_mm: float,
     reference: str = "",
     value: str = "",
+    footprint: str = "",
     unit: int = 1,
     orientation_degrees: int = 0,
     mirror_x: bool = False,
     mirror_y: bool = False,
     kicad_factory: _KiCadFactory | None = None,
 ) -> str:
-    """Dispatch a `PlaceLibrarySymbol` IPC call to eeschema.
+    """Place a library symbol in eeschema via ``PlaceSymbolFromLibrary``.
 
-    Mirrors the GUI's "place from library" path one-to-one — KiCad
-    constructs the SCH_SYMBOL via its own constructor, handling pin
-    transforms, default field positions, attribute inheritance, etc.
-    Single IPC call; no client-side proto juggling.
+    KiCad builds the symbol the same way its symbol chooser does: library
+    table lookup, pin transforms, default fields, and annotation when no
+    reference is given. Value, footprint and mirroring are not part of that
+    command, so when they differ from what KiCad placed they are applied to
+    the returned instance with a follow-up ``UpdateItems``.
 
-    Requires KiCad ≥ the build that contains the `PlaceLibrarySymbol`
-    handler (our upstream patch on master branch
-    `feat/ipc-get-library-symbol`). When the gate is closed,
-    :class:`SchematicIPCRequiredError` is raised.
+    Raises :class:`SchematicIPCRequiredError` when the gate is closed.
     """
 
     ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
     if not ok:
         raise SchematicIPCRequiredError(reason)
+
+    from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
+        SchematicSymbolOrientation,
+    )
+
+    orientation_map = {
+        0: SchematicSymbolOrientation.SSO_0,
+        90: SchematicSymbolOrientation.SSO_90,
+        180: SchematicSymbolOrientation.SSO_180,
+        270: SchematicSymbolOrientation.SSO_270,
+    }
+    if orientation_degrees not in orientation_map:
+        raise ValueError(
+            f"orientation_degrees must be one of 0/90/180/270; got {orientation_degrees}"
+        )
 
     if kicad_factory is None:
         from ._master_client import MasterKiCadClient
@@ -546,74 +610,103 @@ def route_schematic_place_symbol(
     from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
         GetOpenDocuments,
         GetOpenDocumentsResponse,
+        ItemStatusCode,
+        UpdateItems,
+        UpdateItemsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.commands.library_commands_pb2 import (
+        PlaceFromLibraryResponse,
     )
     from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
     from kicad_mcp._master_proto.mp.schematic.schematic_commands_pb2 import (
-        PlaceLibrarySymbol,
-        PlaceLibrarySymbolResponse,
+        PlaceSymbolFromLibrary,
     )
     from kicad_mcp._master_proto.mp.schematic.schematic_types_pb2 import (
-        SchematicSymbolOrientation,
+        SchematicSymbolInstance,
     )
+
+    from ._master_client import ApiError, MasterAny
 
     client = kicad_factory()
 
-    # Resolve the active schematic document.
     docs_req = GetOpenDocuments()
     docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
-    docs_resp = client.send(docs_req, GetOpenDocumentsResponse)
-    docs = list(docs_resp.documents)
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
     if not docs:
         raise SchematicIPCRequiredError(
-            "No schematic document is open in eeschema. Cannot dispatch PlaceLibrarySymbol."
+            "No schematic document is open in eeschema. Cannot place a library symbol."
         )
     doc = docs[0]
 
-    place = PlaceLibrarySymbol()
-    place.document.CopyFrom(doc)
-    place.id.library_nickname = library
-    place.id.entry_name = symbol_name
+    place = PlaceSymbolFromLibrary()
+    place.header.document.CopyFrom(doc)
+    place.lib_id.library_nickname = library
+    place.lib_id.entry_name = symbol_name
     place.position.x_nm = int(round(x_mm * 1_000_000))
     place.position.y_nm = int(round(y_mm * 1_000_000))
+    place.orientation = orientation_map[orientation_degrees]
+    if unit and unit > 1:
+        place.unit.unit = unit
     if reference:
         place.reference = reference
-    if value:
-        place.value = value
-    if unit and unit > 1:
-        place.unit = unit
 
-    orientation_map = {
-        0: SchematicSymbolOrientation.SSO_0,
-        90: SchematicSymbolOrientation.SSO_90,
-        180: SchematicSymbolOrientation.SSO_180,
-        270: SchematicSymbolOrientation.SSO_270,
-    }
-    if orientation_degrees in orientation_map:
-        place.orientation = orientation_map[orientation_degrees]
-    elif orientation_degrees:
-        raise ValueError(
-            f"orientation_degrees must be one of 0/90/180/270; got {orientation_degrees}"
+    try:
+        response = client.send(place, PlaceFromLibraryResponse)
+    except ApiError as exc:
+        if "not found" not in str(exc) or not _load_symbol_library(client, library):
+            raise
+        response = client.send(place, PlaceFromLibraryResponse)
+    placed = SchematicSymbolInstance()
+    if not response.item.Unpack(placed):
+        raise ApiError(
+            "Could not unpack the placed symbol from the PlaceSymbolFromLibrary response"
         )
 
-    if mirror_x:
-        place.mirror_x = True
-    if mirror_y:
-        place.mirror_y = True
+    changed = False
+    if value and placed.value_field.text.text != value:
+        placed.value_field.text.text = value
+        changed = True
+    if footprint and placed.footprint_field.text.text != footprint:
+        placed.footprint_field.text.text = footprint
+        changed = True
+    if mirror_x and not placed.transform.mirror_x:
+        placed.transform.mirror_x = True
+        changed = True
+    if mirror_y and not placed.transform.mirror_y:
+        placed.transform.mirror_y = True
+        changed = True
 
-    response = client.send(place, PlaceLibrarySymbolResponse)
-    placed_id = response.placed.id.value
+    if changed:
+        update = UpdateItems()
+        update.header.document.CopyFrom(doc)
+        packed = MasterAny()
+        packed.Pack(placed)
+        update.items.append(packed)
+        update_response = client.send(update, UpdateItemsResponse)
+        for result in update_response.updated_items:
+            if result.status.code != ItemStatusCode.ISC_OK:
+                raise ApiError(
+                    f"Placed {library}:{symbol_name} but KiCad rejected the field update: "
+                    f"{result.status.error_message}",
+                    status_code=int(result.status.code),
+                    raw_message=result.status.error_message,
+                )
+
+    placed_id = placed.id.value
+    placed_ref = placed.reference_field.text.text or reference
+    placed_value = placed.value_field.text.text or value
     logger.info(
         "schematic_ipc_place_symbol_succeeded",
         library=library,
         symbol_name=symbol_name,
         x_mm=x_mm,
         y_mm=y_mm,
-        reference=reference,
+        reference=placed_ref,
         kiid=placed_id,
     )
     return (
         f"Placed {library}:{symbol_name} as "
-        f"{reference or '(auto-ref)'} ({value or 'default'}) at "
+        f"{placed_ref or '(auto-ref)'} ({placed_value or 'default'}) at "
         f"({x_mm:.2f}, {y_mm:.2f}) mm via IPC. "
         f"KIID={placed_id}. "
         f"{SCH_IPC_PERSISTENCE_HINT}"

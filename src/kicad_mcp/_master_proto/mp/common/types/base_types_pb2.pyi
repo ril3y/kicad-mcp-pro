@@ -59,6 +59,15 @@ class GraphicFillType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     GFT_REVERSE_HATCH: _ClassVar[GraphicFillType]
     GFT_CROSS_HATCH: _ClassVar[GraphicFillType]
 
+class LineEndingStyle(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    LES_UNKNOWN: _ClassVar[LineEndingStyle]
+    LES_NONE: _ClassVar[LineEndingStyle]
+    LES_ARROW: _ClassVar[LineEndingStyle]
+    LES_CIRCLE: _ClassVar[LineEndingStyle]
+    LES_SQUARE: _ClassVar[LineEndingStyle]
+    LES_ARROW_OPEN: _ClassVar[LineEndingStyle]
+
 class AxisAlignment(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     AA_UNKNOWN: _ClassVar[AxisAlignment]
@@ -124,6 +133,16 @@ class PageOrientation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PO_UNKNOWN: _ClassVar[PageOrientation]
     PO_LANDSCAPE: _ClassVar[PageOrientation]
     PO_PORTRAIT: _ClassVar[PageOrientation]
+
+class MarkerType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MT_UNKNOWN: _ClassVar[MarkerType]
+    MT_ERC: _ClassVar[MarkerType]
+    MT_DRC: _ClassVar[MarkerType]
+    MT_DRAWING_SHEET: _ClassVar[MarkerType]
+    MT_RATSNEST: _ClassVar[MarkerType]
+    MT_PARITY: _ClassVar[MarkerType]
+    MT_SIMULATION: _ClassVar[MarkerType]
 CS_UNKNOWN: CommandStatus
 CS_OK: CommandStatus
 CS_FAILED: CommandStatus
@@ -157,6 +176,12 @@ GFT_FILLED_WITH_BACKGROUND_BODY_COLOR: GraphicFillType
 GFT_HATCH: GraphicFillType
 GFT_REVERSE_HATCH: GraphicFillType
 GFT_CROSS_HATCH: GraphicFillType
+LES_UNKNOWN: LineEndingStyle
+LES_NONE: LineEndingStyle
+LES_ARROW: LineEndingStyle
+LES_CIRCLE: LineEndingStyle
+LES_SQUARE: LineEndingStyle
+LES_ARROW_OPEN: LineEndingStyle
 AA_UNKNOWN: AxisAlignment
 AA_X_AXIS: AxisAlignment
 AA_Y_AXIS: AxisAlignment
@@ -205,6 +230,13 @@ PS_USER: PageSize
 PO_UNKNOWN: PageOrientation
 PO_LANDSCAPE: PageOrientation
 PO_PORTRAIT: PageOrientation
+MT_UNKNOWN: MarkerType
+MT_ERC: MarkerType
+MT_DRC: MarkerType
+MT_DRAWING_SHEET: MarkerType
+MT_RATSNEST: MarkerType
+MT_PARITY: MarkerType
+MT_SIMULATION: MarkerType
 
 class CommandStatusResponse(_message.Message):
     __slots__ = ("status",)
@@ -437,16 +469,26 @@ class Text(_message.Message):
     def __init__(self, position: _Optional[_Union[Vector2, _Mapping]] = ..., attributes: _Optional[_Union[TextAttributes, _Mapping]] = ..., text: _Optional[str] = ..., hyperlink: _Optional[str] = ...) -> None: ...
 
 class TextBox(_message.Message):
-    __slots__ = ("top_left", "bottom_right", "attributes", "text")
+    __slots__ = ("top_left", "bottom_right", "attributes", "text", "border_enabled", "margin_left", "margin_top", "margin_right", "margin_bottom")
     TOP_LEFT_FIELD_NUMBER: _ClassVar[int]
     BOTTOM_RIGHT_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
+    BORDER_ENABLED_FIELD_NUMBER: _ClassVar[int]
+    MARGIN_LEFT_FIELD_NUMBER: _ClassVar[int]
+    MARGIN_TOP_FIELD_NUMBER: _ClassVar[int]
+    MARGIN_RIGHT_FIELD_NUMBER: _ClassVar[int]
+    MARGIN_BOTTOM_FIELD_NUMBER: _ClassVar[int]
     top_left: Vector2
     bottom_right: Vector2
     attributes: TextAttributes
     text: str
-    def __init__(self, top_left: _Optional[_Union[Vector2, _Mapping]] = ..., bottom_right: _Optional[_Union[Vector2, _Mapping]] = ..., attributes: _Optional[_Union[TextAttributes, _Mapping]] = ..., text: _Optional[str] = ...) -> None: ...
+    border_enabled: bool
+    margin_left: Distance
+    margin_top: Distance
+    margin_right: Distance
+    margin_bottom: Distance
+    def __init__(self, top_left: _Optional[_Union[Vector2, _Mapping]] = ..., bottom_right: _Optional[_Union[Vector2, _Mapping]] = ..., attributes: _Optional[_Union[TextAttributes, _Mapping]] = ..., text: _Optional[str] = ..., border_enabled: bool = ..., margin_left: _Optional[_Union[Distance, _Mapping]] = ..., margin_top: _Optional[_Union[Distance, _Mapping]] = ..., margin_right: _Optional[_Union[Distance, _Mapping]] = ..., margin_bottom: _Optional[_Union[Distance, _Mapping]] = ...) -> None: ...
 
 class StrokeAttributes(_message.Message):
     __slots__ = ("width", "style", "color")
@@ -550,8 +592,20 @@ class GraphicEllipseArcAttributes(_message.Message):
     end_angle: Angle
     def __init__(self, center: _Optional[_Union[Vector2, _Mapping]] = ..., major_radius: _Optional[_Union[Distance, _Mapping]] = ..., minor_radius: _Optional[_Union[Distance, _Mapping]] = ..., rotation: _Optional[_Union[Angle, _Mapping]] = ..., start_angle: _Optional[_Union[Angle, _Mapping]] = ..., end_angle: _Optional[_Union[Angle, _Mapping]] = ...) -> None: ...
 
+class LineEnding(_message.Message):
+    __slots__ = ("style", "length", "width", "stroke")
+    STYLE_FIELD_NUMBER: _ClassVar[int]
+    LENGTH_FIELD_NUMBER: _ClassVar[int]
+    WIDTH_FIELD_NUMBER: _ClassVar[int]
+    STROKE_FIELD_NUMBER: _ClassVar[int]
+    style: LineEndingStyle
+    length: Distance
+    width: Distance
+    stroke: StrokeAttributes
+    def __init__(self, style: _Optional[_Union[LineEndingStyle, str]] = ..., length: _Optional[_Union[Distance, _Mapping]] = ..., width: _Optional[_Union[Distance, _Mapping]] = ..., stroke: _Optional[_Union[StrokeAttributes, _Mapping]] = ...) -> None: ...
+
 class GraphicShape(_message.Message):
-    __slots__ = ("attributes", "segment", "rectangle", "arc", "circle", "polygon", "bezier", "ellipse", "ellipse_arc")
+    __slots__ = ("attributes", "segment", "rectangle", "arc", "circle", "polygon", "bezier", "ellipse", "ellipse_arc", "start_ending", "end_ending")
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_FIELD_NUMBER: _ClassVar[int]
     RECTANGLE_FIELD_NUMBER: _ClassVar[int]
@@ -561,6 +615,8 @@ class GraphicShape(_message.Message):
     BEZIER_FIELD_NUMBER: _ClassVar[int]
     ELLIPSE_FIELD_NUMBER: _ClassVar[int]
     ELLIPSE_ARC_FIELD_NUMBER: _ClassVar[int]
+    START_ENDING_FIELD_NUMBER: _ClassVar[int]
+    END_ENDING_FIELD_NUMBER: _ClassVar[int]
     attributes: GraphicAttributes
     segment: GraphicSegmentAttributes
     rectangle: GraphicRectangleAttributes
@@ -570,7 +626,9 @@ class GraphicShape(_message.Message):
     bezier: GraphicBezierAttributes
     ellipse: GraphicEllipseAttributes
     ellipse_arc: GraphicEllipseArcAttributes
-    def __init__(self, attributes: _Optional[_Union[GraphicAttributes, _Mapping]] = ..., segment: _Optional[_Union[GraphicSegmentAttributes, _Mapping]] = ..., rectangle: _Optional[_Union[GraphicRectangleAttributes, _Mapping]] = ..., arc: _Optional[_Union[GraphicArcAttributes, _Mapping]] = ..., circle: _Optional[_Union[GraphicCircleAttributes, _Mapping]] = ..., polygon: _Optional[_Union[PolySet, _Mapping]] = ..., bezier: _Optional[_Union[GraphicBezierAttributes, _Mapping]] = ..., ellipse: _Optional[_Union[GraphicEllipseAttributes, _Mapping]] = ..., ellipse_arc: _Optional[_Union[GraphicEllipseArcAttributes, _Mapping]] = ...) -> None: ...
+    start_ending: LineEnding
+    end_ending: LineEnding
+    def __init__(self, attributes: _Optional[_Union[GraphicAttributes, _Mapping]] = ..., segment: _Optional[_Union[GraphicSegmentAttributes, _Mapping]] = ..., rectangle: _Optional[_Union[GraphicRectangleAttributes, _Mapping]] = ..., arc: _Optional[_Union[GraphicArcAttributes, _Mapping]] = ..., circle: _Optional[_Union[GraphicCircleAttributes, _Mapping]] = ..., polygon: _Optional[_Union[PolySet, _Mapping]] = ..., bezier: _Optional[_Union[GraphicBezierAttributes, _Mapping]] = ..., ellipse: _Optional[_Union[GraphicEllipseAttributes, _Mapping]] = ..., ellipse_arc: _Optional[_Union[GraphicEllipseArcAttributes, _Mapping]] = ..., start_ending: _Optional[_Union[LineEnding, _Mapping]] = ..., end_ending: _Optional[_Union[LineEnding, _Mapping]] = ...) -> None: ...
 
 class CompoundShape(_message.Message):
     __slots__ = ("shapes",)
@@ -608,18 +666,6 @@ class TitleBlockInfo(_message.Message):
     comment9: str
     def __init__(self, title: _Optional[str] = ..., date: _Optional[str] = ..., revision: _Optional[str] = ..., company: _Optional[str] = ..., comment1: _Optional[str] = ..., comment2: _Optional[str] = ..., comment3: _Optional[str] = ..., comment4: _Optional[str] = ..., comment5: _Optional[str] = ..., comment6: _Optional[str] = ..., comment7: _Optional[str] = ..., comment8: _Optional[str] = ..., comment9: _Optional[str] = ...) -> None: ...
 
-class RuleCheckerMarkerID(_message.Message):
-    __slots__ = ("opaque_id",)
-    OPAQUE_ID_FIELD_NUMBER: _ClassVar[int]
-    opaque_id: str
-    def __init__(self, opaque_id: _Optional[str] = ...) -> None: ...
-
-class RuleCheckerMarker(_message.Message):
-    __slots__ = ("id",)
-    ID_FIELD_NUMBER: _ClassVar[int]
-    id: RuleCheckerMarkerID
-    def __init__(self, id: _Optional[_Union[RuleCheckerMarkerID, _Mapping]] = ...) -> None: ...
-
 class MinOptMax(_message.Message):
     __slots__ = ("min", "opt", "max")
     MIN_FIELD_NUMBER: _ClassVar[int]
@@ -641,3 +687,11 @@ class PageSettings(_message.Message):
     orientation: PageOrientation
     drawing_sheet: str
     def __init__(self, page_size: _Optional[_Union[PageSize, str]] = ..., user_page_size: _Optional[_Union[Vector2, _Mapping]] = ..., orientation: _Optional[_Union[PageOrientation, str]] = ..., drawing_sheet: _Optional[str] = ...) -> None: ...
+
+class CustomProperty(_message.Message):
+    __slots__ = ("key", "value")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    key: str
+    value: str
+    def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...

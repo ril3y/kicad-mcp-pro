@@ -11,9 +11,12 @@ import structlog
 from kipy.board import Board
 from kipy.kicad import KiCad
 
+from . import kipy_compat
 from .config import get_config
 from .errors import KiCadBoardNotOpenError, KiCadMcpError, KiCadNotRunningError
 from .kicad.session import KiCadSession
+
+kipy_compat.install()
 
 
 class KiCadConnectionError(KiCadNotRunningError):

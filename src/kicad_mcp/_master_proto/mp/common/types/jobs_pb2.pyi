@@ -13,10 +13,19 @@ class JobStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     JS_SUCCESS: _ClassVar[JobStatus]
     JS_WARNING: _ClassVar[JobStatus]
     JS_ERROR: _ClassVar[JobStatus]
+
+class AntialiasingMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    AAM_UNKNOWN: _ClassVar[AntialiasingMode]
+    AAM_NONE: _ClassVar[AntialiasingMode]
+    AAM_STANDARD: _ClassVar[AntialiasingMode]
 JS_UNSPECIFIED: JobStatus
 JS_SUCCESS: JobStatus
 JS_WARNING: JobStatus
 JS_ERROR: JobStatus
+AAM_UNKNOWN: AntialiasingMode
+AAM_NONE: AntialiasingMode
+AAM_STANDARD: AntialiasingMode
 
 class RunJobResponse(_message.Message):
     __slots__ = ("status", "output_path", "message")

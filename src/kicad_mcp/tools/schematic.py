@@ -3692,23 +3692,13 @@ def register(mcp: FastMCP) -> None:
     ) -> str:
         """Place a library symbol via eeschema IPC.
 
-        Dispatches to KiCad's ``PlaceLibrarySymbol`` IPC command, which
-        uses the same C++ constructor the GUI uses when you place a
-        symbol from the library chooser. KiCad handles all the lib→
-        instance fixup (pin transforms, default field positions,
-        attribute inheritance) internally.
-
-        Requires a KiCad build containing the ``PlaceLibrarySymbol``
-        handler (our upstream patch on ``feat/ipc-get-library-symbol``).
-        When the IPC gate is closed the tool raises
-        :class:`SchematicIPCRequiredError`.
-
-        ``footprint`` is accepted for API parity but the underlying
-        IPC command does not currently expose a footprint override; the
-        library symbol's default footprint field is preserved.
+        Uses KiCad's ``PlaceSymbolFromLibrary`` IPC command, which builds
+        the symbol the same way the GUI symbol chooser does (pin
+        transforms, default field positions, attribute inheritance).
+        ``value`` and ``footprint`` are applied afterwards when they
+        differ from the library defaults. When the IPC gate is closed the
+        tool raises :class:`SchematicIPCRequiredError`.
         """
-        del footprint  # not yet plumbed through PlaceLibrarySymbol
-
         target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
         snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))
 
@@ -3719,6 +3709,7 @@ def register(mcp: FastMCP) -> None:
             y_mm=target_y,
             reference=reference,
             value=value,
+            footprint=footprint,
             unit=unit if unit and unit > 0 else 1,
             orientation_degrees=rotation,
         )
@@ -3798,7 +3789,7 @@ def register(mcp: FastMCP) -> None:
 
         Power symbols in KiCad live in the ``power`` library; this tool
         is a thin wrapper around ``sch_add_symbol`` that dispatches to
-        the ``PlaceLibrarySymbol`` IPC command.
+        the ``PlaceSymbolFromLibrary`` IPC command.
         """
         target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
         snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))

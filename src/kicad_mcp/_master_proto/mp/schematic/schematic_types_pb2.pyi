@@ -85,6 +85,27 @@ class SchematicPinShape(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SPS_OUTPUT_LOW: _ClassVar[SchematicPinShape]
     SPS_FALLING_EDGE_CLOCK: _ClassVar[SchematicPinShape]
     SPS_NONLOGIC: _ClassVar[SchematicPinShape]
+
+class PinMapOverrideMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PMOM_UNKNOWN: _ClassVar[PinMapOverrideMode]
+    PMOM_USE_LIBRARY_DEFAULT: _ClassVar[PinMapOverrideMode]
+    PMOM_USE_NAMED_MAP: _ClassVar[PinMapOverrideMode]
+    PMOM_FORCE_IDENTITY: _ClassVar[PinMapOverrideMode]
+    PMOM_DELEGATE_TO_UNIT_1: _ClassVar[PinMapOverrideMode]
+
+class SchematicPassthroughMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SPM_UNKNOWN: _ClassVar[SchematicPassthroughMode]
+    SPM_DEFAULT: _ClassVar[SchematicPassthroughMode]
+    SPM_BLOCK: _ClassVar[SchematicPassthroughMode]
+    SPM_FORCE: _ClassVar[SchematicPassthroughMode]
+
+class TableStrokeMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    TSM_UNKNOWN: _ClassVar[TableStrokeMode]
+    TSM_DISABLED: _ClassVar[TableStrokeMode]
+    TSM_ENABLED: _ClassVar[TableStrokeMode]
 SLT_UNKNOWN: SchematicLineType
 SLT_WIRE: SchematicLineType
 SLT_BUS: SchematicLineType
@@ -136,95 +157,123 @@ SPS_CLOCK_LOW: SchematicPinShape
 SPS_OUTPUT_LOW: SchematicPinShape
 SPS_FALLING_EDGE_CLOCK: SchematicPinShape
 SPS_NONLOGIC: SchematicPinShape
+PMOM_UNKNOWN: PinMapOverrideMode
+PMOM_USE_LIBRARY_DEFAULT: PinMapOverrideMode
+PMOM_USE_NAMED_MAP: PinMapOverrideMode
+PMOM_FORCE_IDENTITY: PinMapOverrideMode
+PMOM_DELEGATE_TO_UNIT_1: PinMapOverrideMode
+SPM_UNKNOWN: SchematicPassthroughMode
+SPM_DEFAULT: SchematicPassthroughMode
+SPM_BLOCK: SchematicPassthroughMode
+SPM_FORCE: SchematicPassthroughMode
+TSM_UNKNOWN: TableStrokeMode
+TSM_DISABLED: TableStrokeMode
+TSM_ENABLED: TableStrokeMode
 
 class SchematicField(_message.Message):
-    __slots__ = ("name", "text", "visible", "show_name", "allow_auto_place", "is_private")
+    __slots__ = ("name", "text", "visible", "show_name", "allow_auto_place", "is_private", "custom_properties")
     NAME_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     VISIBLE_FIELD_NUMBER: _ClassVar[int]
     SHOW_NAME_FIELD_NUMBER: _ClassVar[int]
     ALLOW_AUTO_PLACE_FIELD_NUMBER: _ClassVar[int]
     IS_PRIVATE_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     name: str
     text: _base_types_pb2.Text
     visible: bool
     show_name: bool
     allow_auto_place: bool
     is_private: bool
-    def __init__(self, name: _Optional[str] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., visible: bool = ..., show_name: bool = ..., allow_auto_place: bool = ..., is_private: bool = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, name: _Optional[str] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., visible: bool = ..., show_name: bool = ..., allow_auto_place: bool = ..., is_private: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicLine(_message.Message):
-    __slots__ = ("id", "start", "end", "type", "stroke", "locked")
+    __slots__ = ("id", "start", "end", "type", "stroke", "locked", "start_ending", "end_ending", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     START_FIELD_NUMBER: _ClassVar[int]
     END_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     STROKE_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    START_ENDING_FIELD_NUMBER: _ClassVar[int]
+    END_ENDING_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     start: _base_types_pb2.Vector2
     end: _base_types_pb2.Vector2
     type: SchematicLineType
     stroke: _base_types_pb2.StrokeAttributes
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., start: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., end: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., type: _Optional[_Union[SchematicLineType, str]] = ..., stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    start_ending: _base_types_pb2.LineEnding
+    end_ending: _base_types_pb2.LineEnding
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., start: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., end: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., type: _Optional[_Union[SchematicLineType, str]] = ..., stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., start_ending: _Optional[_Union[_base_types_pb2.LineEnding, _Mapping]] = ..., end_ending: _Optional[_Union[_base_types_pb2.LineEnding, _Mapping]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class Junction(_message.Message):
-    __slots__ = ("id", "position", "diameter", "color", "locked")
+    __slots__ = ("id", "position", "diameter", "color", "locked", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     DIAMETER_FIELD_NUMBER: _ClassVar[int]
     COLOR_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     diameter: _base_types_pb2.Distance
     color: _base_types_pb2.Color
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., diameter: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., color: _Optional[_Union[_base_types_pb2.Color, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., diameter: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., color: _Optional[_Union[_base_types_pb2.Color, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class NoConnectMarker(_message.Message):
-    __slots__ = ("id", "position", "size", "locked")
+    __slots__ = ("id", "position", "size", "locked", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     SIZE_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     size: _base_types_pb2.Distance
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class BusEntry(_message.Message):
-    __slots__ = ("id", "position", "size", "stroke", "locked", "type")
+    __slots__ = ("id", "position", "size", "stroke", "locked", "type", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     SIZE_FIELD_NUMBER: _ClassVar[int]
     STROKE_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     size: _base_types_pb2.Vector2
     stroke: _base_types_pb2.StrokeAttributes
     locked: _base_types_pb2.LockedState
     type: BusEntryType
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., type: _Optional[_Union[BusEntryType, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., type: _Optional[_Union[BusEntryType, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicText(_message.Message):
-    __slots__ = ("id", "text", "locked", "exclude_from_sim")
+    __slots__ = ("id", "text", "locked", "exclude_from_sim", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
     EXCLUDE_FROM_SIM_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     text: _base_types_pb2.Text
     locked: _base_types_pb2.LockedState
     exclude_from_sim: bool
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., exclude_from_sim: bool = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., exclude_from_sim: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicTextBox(_message.Message):
-    __slots__ = ("id", "textbox", "graphic_attributes", "locked", "exclude_from_sim", "margin_left", "margin_top", "margin_right", "margin_bottom")
+    __slots__ = ("id", "textbox", "graphic_attributes", "locked", "exclude_from_sim", "margin_left", "margin_top", "margin_right", "margin_bottom", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     TEXTBOX_FIELD_NUMBER: _ClassVar[int]
     GRAPHIC_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
@@ -234,6 +283,7 @@ class SchematicTextBox(_message.Message):
     MARGIN_TOP_FIELD_NUMBER: _ClassVar[int]
     MARGIN_RIGHT_FIELD_NUMBER: _ClassVar[int]
     MARGIN_BOTTOM_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     textbox: _base_types_pb2.TextBox
     graphic_attributes: _base_types_pb2.GraphicAttributes
@@ -243,52 +293,65 @@ class SchematicTextBox(_message.Message):
     margin_top: _base_types_pb2.Distance
     margin_right: _base_types_pb2.Distance
     margin_bottom: _base_types_pb2.Distance
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., textbox: _Optional[_Union[_base_types_pb2.TextBox, _Mapping]] = ..., graphic_attributes: _Optional[_Union[_base_types_pb2.GraphicAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., exclude_from_sim: bool = ..., margin_left: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_top: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_right: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_bottom: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., textbox: _Optional[_Union[_base_types_pb2.TextBox, _Mapping]] = ..., graphic_attributes: _Optional[_Union[_base_types_pb2.GraphicAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., exclude_from_sim: bool = ..., margin_left: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_top: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_right: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., margin_bottom: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicGraphicShape(_message.Message):
-    __slots__ = ("shape", "id", "locked")
+    __slots__ = ("shape", "id", "locked", "custom_properties")
     SHAPE_FIELD_NUMBER: _ClassVar[int]
     ID_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     shape: _base_types_pb2.GraphicShape
     id: _base_types_pb2.KIID
     locked: _base_types_pb2.LockedState
-    def __init__(self, shape: _Optional[_Union[_base_types_pb2.GraphicShape, _Mapping]] = ..., id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, shape: _Optional[_Union[_base_types_pb2.GraphicShape, _Mapping]] = ..., id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicImage(_message.Message):
-    __slots__ = ("id", "position", "transform_origin_offset", "image_scale", "image_data", "locked")
+    __slots__ = ("id", "position", "transform_origin_offset", "image_scale", "image_data", "locked", "custom_properties", "orientation", "opacity")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TRANSFORM_ORIGIN_OFFSET_FIELD_NUMBER: _ClassVar[int]
     IMAGE_SCALE_FIELD_NUMBER: _ClassVar[int]
     IMAGE_DATA_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
+    ORIENTATION_FIELD_NUMBER: _ClassVar[int]
+    OPACITY_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     transform_origin_offset: _base_types_pb2.Vector2
     image_scale: _base_types_pb2.Ratio
     image_data: bytes
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., transform_origin_offset: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., image_scale: _Optional[_Union[_base_types_pb2.Ratio, _Mapping]] = ..., image_data: _Optional[bytes] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    orientation: _base_types_pb2.Angle
+    opacity: float
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., transform_origin_offset: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., image_scale: _Optional[_Union[_base_types_pb2.Ratio, _Mapping]] = ..., image_data: _Optional[bytes] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ..., orientation: _Optional[_Union[_base_types_pb2.Angle, _Mapping]] = ..., opacity: _Optional[float] = ...) -> None: ...
 
 class LocalLabel(_message.Message):
-    __slots__ = ("id", "position", "text", "spin_style", "fields", "locked")
+    __slots__ = ("id", "position", "text", "spin_style", "fields", "locked", "fields_autoplaced", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     SPIN_STYLE_FIELD_NUMBER: _ClassVar[int]
     FIELDS_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     text: _base_types_pb2.Text
     spin_style: SchematicLabelSpinStyle
     fields: _containers.RepeatedCompositeFieldContainer[SchematicField]
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    fields_autoplaced: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., fields_autoplaced: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class GlobalLabel(_message.Message):
-    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked", "intersheet_refs_field")
+    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked", "intersheet_refs_field", "fields_autoplaced", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
@@ -297,6 +360,8 @@ class GlobalLabel(_message.Message):
     FIELDS_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
     INTERSHEET_REFS_FIELD_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     text: _base_types_pb2.Text
@@ -305,10 +370,12 @@ class GlobalLabel(_message.Message):
     fields: _containers.RepeatedCompositeFieldContainer[SchematicField]
     locked: _base_types_pb2.LockedState
     intersheet_refs_field: SchematicField
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., intersheet_refs_field: _Optional[_Union[SchematicField, _Mapping]] = ...) -> None: ...
+    fields_autoplaced: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., intersheet_refs_field: _Optional[_Union[SchematicField, _Mapping]] = ..., fields_autoplaced: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class HierarchicalLabel(_message.Message):
-    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked")
+    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked", "fields_autoplaced", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
@@ -316,6 +383,8 @@ class HierarchicalLabel(_message.Message):
     SHAPE_FIELD_NUMBER: _ClassVar[int]
     FIELDS_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     text: _base_types_pb2.Text
@@ -323,10 +392,12 @@ class HierarchicalLabel(_message.Message):
     shape: SchematicLabelShape
     fields: _containers.RepeatedCompositeFieldContainer[SchematicField]
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    fields_autoplaced: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., fields_autoplaced: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class DirectiveLabel(_message.Message):
-    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked", "pin_length", "symbol_size")
+    __slots__ = ("id", "position", "text", "spin_style", "shape", "fields", "locked", "pin_length", "symbol_size", "fields_autoplaced", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
@@ -336,6 +407,8 @@ class DirectiveLabel(_message.Message):
     LOCKED_FIELD_NUMBER: _ClassVar[int]
     PIN_LENGTH_FIELD_NUMBER: _ClassVar[int]
     SYMBOL_SIZE_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     text: _base_types_pb2.Text
@@ -345,22 +418,46 @@ class DirectiveLabel(_message.Message):
     locked: _base_types_pb2.LockedState
     pin_length: _base_types_pb2.Distance
     symbol_size: _base_types_pb2.Distance
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., pin_length: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., symbol_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ...) -> None: ...
+    fields_autoplaced: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., pin_length: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., symbol_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., fields_autoplaced: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class Group(_message.Message):
-    __slots__ = ("id", "name", "items", "locked")
+    __slots__ = ("id", "name", "items", "locked", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     name: str
     items: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.KIID]
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., name: _Optional[str] = ..., items: _Optional[_Iterable[_Union[_base_types_pb2.KIID, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., name: _Optional[str] = ..., items: _Optional[_Iterable[_Union[_base_types_pb2.KIID, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
+
+class SchematicRuleArea(_message.Message):
+    __slots__ = ("id", "shape", "locked", "exclude_from_sim", "exclude_from_bom", "exclude_from_board", "dnp", "custom_properties")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    SHAPE_FIELD_NUMBER: _ClassVar[int]
+    LOCKED_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_FROM_SIM_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_FROM_BOM_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_FROM_BOARD_FIELD_NUMBER: _ClassVar[int]
+    DNP_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
+    id: _base_types_pb2.KIID
+    shape: _base_types_pb2.GraphicShape
+    locked: _base_types_pb2.LockedState
+    exclude_from_sim: bool
+    exclude_from_bom: bool
+    exclude_from_board: bool
+    dnp: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., shape: _Optional[_Union[_base_types_pb2.GraphicShape, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., exclude_from_sim: bool = ..., exclude_from_bom: bool = ..., exclude_from_board: bool = ..., dnp: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SheetPin(_message.Message):
-    __slots__ = ("id", "position", "text", "spin_style", "shape", "side", "locked")
+    __slots__ = ("id", "position", "text", "spin_style", "shape", "side", "locked", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
@@ -368,6 +465,7 @@ class SheetPin(_message.Message):
     SHAPE_FIELD_NUMBER: _ClassVar[int]
     SIDE_FIELD_NUMBER: _ClassVar[int]
     LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     text: _base_types_pb2.Text
@@ -375,10 +473,11 @@ class SheetPin(_message.Message):
     shape: SchematicLabelShape
     side: SheetSide
     locked: _base_types_pb2.LockedState
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., side: _Optional[_Union[SheetSide, str]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., text: _Optional[_Union[_base_types_pb2.Text, _Mapping]] = ..., spin_style: _Optional[_Union[SchematicLabelSpinStyle, str]] = ..., shape: _Optional[_Union[SchematicLabelShape, str]] = ..., side: _Optional[_Union[SheetSide, str]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SheetSymbol(_message.Message):
-    __slots__ = ("id", "position", "size", "border_stroke", "fill", "locked", "name_field", "filename_field", "user_fields", "pins", "exclude_from_sim", "exclude_from_bom", "exclude_from_board", "dnp", "path", "page_number")
+    __slots__ = ("id", "position", "size", "border_stroke", "fill", "locked", "name_field", "filename_field", "user_fields", "pins", "exclude_from_sim", "exclude_from_bom", "exclude_from_board", "dnp", "path", "page_number", "fields_autoplaced", "custom_properties", "variants")
     ID_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     SIZE_FIELD_NUMBER: _ClassVar[int]
@@ -395,6 +494,9 @@ class SheetSymbol(_message.Message):
     DNP_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
     PAGE_NUMBER_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
+    VARIANTS_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     position: _base_types_pb2.Vector2
     size: _base_types_pb2.Vector2
@@ -411,7 +513,10 @@ class SheetSymbol(_message.Message):
     dnp: bool
     path: _base_types_pb2.SheetPath
     page_number: str
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., border_stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., fill: _Optional[_Union[_base_types_pb2.GraphicFillAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., name_field: _Optional[_Union[SchematicField, _Mapping]] = ..., filename_field: _Optional[_Union[SchematicField, _Mapping]] = ..., user_fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., pins: _Optional[_Iterable[_Union[SheetPin, _Mapping]]] = ..., exclude_from_sim: bool = ..., exclude_from_bom: bool = ..., exclude_from_board: bool = ..., dnp: bool = ..., path: _Optional[_Union[_base_types_pb2.SheetPath, _Mapping]] = ..., page_number: _Optional[str] = ...) -> None: ...
+    fields_autoplaced: bool
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    variants: SheetVariants
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., size: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., border_stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., fill: _Optional[_Union[_base_types_pb2.GraphicFillAttributes, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., name_field: _Optional[_Union[SchematicField, _Mapping]] = ..., filename_field: _Optional[_Union[SchematicField, _Mapping]] = ..., user_fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., pins: _Optional[_Iterable[_Union[SheetPin, _Mapping]]] = ..., exclude_from_sim: bool = ..., exclude_from_bom: bool = ..., exclude_from_board: bool = ..., dnp: bool = ..., path: _Optional[_Union[_base_types_pb2.SheetPath, _Mapping]] = ..., page_number: _Optional[str] = ..., fields_autoplaced: bool = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ..., variants: _Optional[_Union[SheetVariants, _Mapping]] = ...) -> None: ...
 
 class SchematicPinAlternate(_message.Message):
     __slots__ = ("name", "shape", "electrical_type")
@@ -424,7 +529,7 @@ class SchematicPinAlternate(_message.Message):
     def __init__(self, name: _Optional[str] = ..., shape: _Optional[_Union[SchematicPinShape, str]] = ..., electrical_type: _Optional[_Union[_base_types_pb2.ElectricalPinType, str]] = ...) -> None: ...
 
 class SchematicPin(_message.Message):
-    __slots__ = ("id", "name", "number", "position", "length", "orientation", "electrical_type", "shape", "visible", "name_text_size", "number_text_size", "alternates", "active_alternate")
+    __slots__ = ("id", "name", "number", "position", "length", "orientation", "electrical_type", "shape", "visible", "name_text_size", "number_text_size", "alternates", "active_alternate", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NUMBER_FIELD_NUMBER: _ClassVar[int]
@@ -438,6 +543,7 @@ class SchematicPin(_message.Message):
     NUMBER_TEXT_SIZE_FIELD_NUMBER: _ClassVar[int]
     ALTERNATES_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_ALTERNATE_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     name: str
     number: str
@@ -451,7 +557,8 @@ class SchematicPin(_message.Message):
     number_text_size: _base_types_pb2.Distance
     alternates: _containers.RepeatedCompositeFieldContainer[SchematicPinAlternate]
     active_alternate: str
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., name: _Optional[str] = ..., number: _Optional[str] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., length: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., orientation: _Optional[_Union[SchematicPinOrientation, str]] = ..., electrical_type: _Optional[_Union[_base_types_pb2.ElectricalPinType, str]] = ..., shape: _Optional[_Union[SchematicPinShape, str]] = ..., visible: bool = ..., name_text_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., number_text_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., alternates: _Optional[_Iterable[_Union[SchematicPinAlternate, _Mapping]]] = ..., active_alternate: _Optional[str] = ...) -> None: ...
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., name: _Optional[str] = ..., number: _Optional[str] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., length: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., orientation: _Optional[_Union[SchematicPinOrientation, str]] = ..., electrical_type: _Optional[_Union[_base_types_pb2.ElectricalPinType, str]] = ..., shape: _Optional[_Union[SchematicPinShape, str]] = ..., visible: bool = ..., name_text_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., number_text_size: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., alternates: _Optional[_Iterable[_Union[SchematicPinAlternate, _Mapping]]] = ..., active_alternate: _Optional[str] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SchematicSymbolUnit(_message.Message):
     __slots__ = ("unit",)
@@ -492,7 +599,7 @@ class SchematicSymbolAttributes(_message.Message):
     def __init__(self, exclude_from_simulation: bool = ..., exclude_from_bill_of_materials: bool = ..., exclude_from_board: bool = ..., exclude_from_position_files: bool = ..., do_not_populate: bool = ...) -> None: ...
 
 class SchematicSymbolVariant(_message.Message):
-    __slots__ = ("name", "description", "attributes", "fields")
+    __slots__ = ("name", "description", "attributes", "fields", "symbol_override", "pin_map_override")
     class FieldsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -504,14 +611,123 @@ class SchematicSymbolVariant(_message.Message):
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     FIELDS_FIELD_NUMBER: _ClassVar[int]
+    SYMBOL_OVERRIDE_FIELD_NUMBER: _ClassVar[int]
+    PIN_MAP_OVERRIDE_FIELD_NUMBER: _ClassVar[int]
     name: str
     description: str
     attributes: SchematicSymbolAttributes
     fields: _containers.ScalarMap[str, str]
-    def __init__(self, name: _Optional[str] = ..., description: _Optional[str] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., fields: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    symbol_override: _base_types_pb2.LibraryIdentifier
+    pin_map_override: PinMapInstanceOverride
+    def __init__(self, name: _Optional[str] = ..., description: _Optional[str] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., fields: _Optional[_Mapping[str, str]] = ..., symbol_override: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., pin_map_override: _Optional[_Union[PinMapInstanceOverride, _Mapping]] = ...) -> None: ...
+
+class SchematicSymbolVariants(_message.Message):
+    __slots__ = ("variants",)
+    VARIANTS_FIELD_NUMBER: _ClassVar[int]
+    variants: _containers.RepeatedCompositeFieldContainer[SchematicSymbolVariant]
+    def __init__(self, variants: _Optional[_Iterable[_Union[SchematicSymbolVariant, _Mapping]]] = ...) -> None: ...
+
+class SheetVariant(_message.Message):
+    __slots__ = ("name", "description", "exclude_from_sim", "exclude_from_bom", "dnp", "fields")
+    class FieldsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_FROM_SIM_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_FROM_BOM_FIELD_NUMBER: _ClassVar[int]
+    DNP_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    description: str
+    exclude_from_sim: bool
+    exclude_from_bom: bool
+    dnp: bool
+    fields: _containers.ScalarMap[str, str]
+    def __init__(self, name: _Optional[str] = ..., description: _Optional[str] = ..., exclude_from_sim: bool = ..., exclude_from_bom: bool = ..., dnp: bool = ..., fields: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class SheetVariants(_message.Message):
+    __slots__ = ("variants",)
+    VARIANTS_FIELD_NUMBER: _ClassVar[int]
+    variants: _containers.RepeatedCompositeFieldContainer[SheetVariant]
+    def __init__(self, variants: _Optional[_Iterable[_Union[SheetVariant, _Mapping]]] = ...) -> None: ...
+
+class PinMapEntry(_message.Message):
+    __slots__ = ("pin_number", "pad_number")
+    PIN_NUMBER_FIELD_NUMBER: _ClassVar[int]
+    PAD_NUMBER_FIELD_NUMBER: _ClassVar[int]
+    pin_number: str
+    pad_number: str
+    def __init__(self, pin_number: _Optional[str] = ..., pad_number: _Optional[str] = ...) -> None: ...
+
+class PinMap(_message.Message):
+    __slots__ = ("name", "entries")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    entries: _containers.RepeatedCompositeFieldContainer[PinMapEntry]
+    def __init__(self, name: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[PinMapEntry, _Mapping]]] = ...) -> None: ...
+
+class AssociatedFootprint(_message.Message):
+    __slots__ = ("footprint", "map_name")
+    FOOTPRINT_FIELD_NUMBER: _ClassVar[int]
+    MAP_NAME_FIELD_NUMBER: _ClassVar[int]
+    footprint: _base_types_pb2.LibraryIdentifier
+    map_name: str
+    def __init__(self, footprint: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., map_name: _Optional[str] = ...) -> None: ...
+
+class SymbolPinMaps(_message.Message):
+    __slots__ = ("associated_footprints", "pin_maps")
+    ASSOCIATED_FOOTPRINTS_FIELD_NUMBER: _ClassVar[int]
+    PIN_MAPS_FIELD_NUMBER: _ClassVar[int]
+    associated_footprints: _containers.RepeatedCompositeFieldContainer[AssociatedFootprint]
+    pin_maps: _containers.RepeatedCompositeFieldContainer[PinMap]
+    def __init__(self, associated_footprints: _Optional[_Iterable[_Union[AssociatedFootprint, _Mapping]]] = ..., pin_maps: _Optional[_Iterable[_Union[PinMap, _Mapping]]] = ...) -> None: ...
+
+class PinMapInstanceOverride(_message.Message):
+    __slots__ = ("mode", "active_map_name", "edits")
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_MAP_NAME_FIELD_NUMBER: _ClassVar[int]
+    EDITS_FIELD_NUMBER: _ClassVar[int]
+    mode: PinMapOverrideMode
+    active_map_name: str
+    edits: _containers.RepeatedCompositeFieldContainer[PinMapEntry]
+    def __init__(self, mode: _Optional[_Union[PinMapOverrideMode, str]] = ..., active_map_name: _Optional[str] = ..., edits: _Optional[_Iterable[_Union[PinMapEntry, _Mapping]]] = ...) -> None: ...
+
+class JumperGroup(_message.Message):
+    __slots__ = ("pin_numbers",)
+    PIN_NUMBERS_FIELD_NUMBER: _ClassVar[int]
+    pin_numbers: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, pin_numbers: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class JumperSettings(_message.Message):
+    __slots__ = ("duplicate_names_are_jumpered", "groups")
+    DUPLICATE_NAMES_ARE_JUMPERED_FIELD_NUMBER: _ClassVar[int]
+    GROUPS_FIELD_NUMBER: _ClassVar[int]
+    duplicate_names_are_jumpered: bool
+    groups: _containers.RepeatedCompositeFieldContainer[JumperGroup]
+    def __init__(self, duplicate_names_are_jumpered: bool = ..., groups: _Optional[_Iterable[_Union[JumperGroup, _Mapping]]] = ...) -> None: ...
+
+class SchematicUnitDisplayName(_message.Message):
+    __slots__ = ("unit", "name")
+    UNIT_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    unit: int
+    name: str
+    def __init__(self, unit: _Optional[int] = ..., name: _Optional[str] = ...) -> None: ...
+
+class SchematicBodyStyle(_message.Message):
+    __slots__ = ("name",)
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    def __init__(self, name: _Optional[str] = ...) -> None: ...
 
 class SchematicSymbol(_message.Message):
-    __slots__ = ("id", "type", "attributes", "reference_field", "value_field", "footprint_field", "datasheet_field", "description_field", "items", "unit_count", "body_style_count", "keywords", "footprint_filters")
+    __slots__ = ("id", "type", "attributes", "reference_field", "value_field", "footprint_field", "datasheet_field", "description_field", "items", "unit_count", "body_style", "keywords", "footprint_filters", "pin_maps", "jumpers", "units_locked", "unit_display_names", "embedded_fonts", "show_pin_numbers", "show_pin_names", "pin_name_offset", "extends")
     ID_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
@@ -522,9 +738,18 @@ class SchematicSymbol(_message.Message):
     DESCRIPTION_FIELD_FIELD_NUMBER: _ClassVar[int]
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     UNIT_COUNT_FIELD_NUMBER: _ClassVar[int]
-    BODY_STYLE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    BODY_STYLE_FIELD_NUMBER: _ClassVar[int]
     KEYWORDS_FIELD_NUMBER: _ClassVar[int]
     FOOTPRINT_FILTERS_FIELD_NUMBER: _ClassVar[int]
+    PIN_MAPS_FIELD_NUMBER: _ClassVar[int]
+    JUMPERS_FIELD_NUMBER: _ClassVar[int]
+    UNITS_LOCKED_FIELD_NUMBER: _ClassVar[int]
+    UNIT_DISPLAY_NAMES_FIELD_NUMBER: _ClassVar[int]
+    EMBEDDED_FONTS_FIELD_NUMBER: _ClassVar[int]
+    SHOW_PIN_NUMBERS_FIELD_NUMBER: _ClassVar[int]
+    SHOW_PIN_NAMES_FIELD_NUMBER: _ClassVar[int]
+    PIN_NAME_OFFSET_FIELD_NUMBER: _ClassVar[int]
+    EXTENDS_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.LibraryIdentifier
     type: SchematicSymbolType
     attributes: SchematicSymbolAttributes
@@ -535,10 +760,19 @@ class SchematicSymbol(_message.Message):
     description_field: SchematicField
     items: _containers.RepeatedCompositeFieldContainer[SchematicSymbolChild]
     unit_count: int
-    body_style_count: int
+    body_style: _containers.RepeatedCompositeFieldContainer[SchematicBodyStyle]
     keywords: str
     footprint_filters: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., type: _Optional[_Union[SchematicSymbolType, str]] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., reference_field: _Optional[_Union[SchematicField, _Mapping]] = ..., value_field: _Optional[_Union[SchematicField, _Mapping]] = ..., footprint_field: _Optional[_Union[SchematicField, _Mapping]] = ..., datasheet_field: _Optional[_Union[SchematicField, _Mapping]] = ..., description_field: _Optional[_Union[SchematicField, _Mapping]] = ..., items: _Optional[_Iterable[_Union[SchematicSymbolChild, _Mapping]]] = ..., unit_count: _Optional[int] = ..., body_style_count: _Optional[int] = ..., keywords: _Optional[str] = ..., footprint_filters: _Optional[_Iterable[str]] = ...) -> None: ...
+    pin_maps: SymbolPinMaps
+    jumpers: JumperSettings
+    units_locked: bool
+    unit_display_names: _containers.RepeatedCompositeFieldContainer[SchematicUnitDisplayName]
+    embedded_fonts: bool
+    show_pin_numbers: bool
+    show_pin_names: bool
+    pin_name_offset: _base_types_pb2.Distance
+    extends: _base_types_pb2.LibraryIdentifier
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., type: _Optional[_Union[SchematicSymbolType, str]] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., reference_field: _Optional[_Union[SchematicField, _Mapping]] = ..., value_field: _Optional[_Union[SchematicField, _Mapping]] = ..., footprint_field: _Optional[_Union[SchematicField, _Mapping]] = ..., datasheet_field: _Optional[_Union[SchematicField, _Mapping]] = ..., description_field: _Optional[_Union[SchematicField, _Mapping]] = ..., items: _Optional[_Iterable[_Union[SchematicSymbolChild, _Mapping]]] = ..., unit_count: _Optional[int] = ..., body_style: _Optional[_Iterable[_Union[SchematicBodyStyle, _Mapping]]] = ..., keywords: _Optional[str] = ..., footprint_filters: _Optional[_Iterable[str]] = ..., pin_maps: _Optional[_Union[SymbolPinMaps, _Mapping]] = ..., jumpers: _Optional[_Union[JumperSettings, _Mapping]] = ..., units_locked: bool = ..., unit_display_names: _Optional[_Iterable[_Union[SchematicUnitDisplayName, _Mapping]]] = ..., embedded_fonts: bool = ..., show_pin_numbers: bool = ..., show_pin_names: bool = ..., pin_name_offset: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., extends: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ...) -> None: ...
 
 class SchematicSymbolTransform(_message.Message):
     __slots__ = ("orientation", "mirror_x", "mirror_y")
@@ -551,7 +785,7 @@ class SchematicSymbolTransform(_message.Message):
     def __init__(self, orientation: _Optional[_Union[SchematicSymbolOrientation, str]] = ..., mirror_x: bool = ..., mirror_y: bool = ...) -> None: ...
 
 class SchematicSymbolInstance(_message.Message):
-    __slots__ = ("id", "path", "position", "transform", "locked", "definition", "reference_field", "value_field", "footprint_field", "datasheet_field", "description_field", "attributes", "unit", "body_style", "show_pin_names", "show_pin_numbers", "pin_name_offset", "variants")
+    __slots__ = ("id", "path", "position", "transform", "locked", "definition", "reference_field", "value_field", "footprint_field", "datasheet_field", "description_field", "attributes", "unit", "body_style", "show_pin_names", "show_pin_numbers", "pin_name_offset", "variants", "user_fields", "pin_map_override", "fields_autoplaced", "lib_id", "passthrough", "custom_properties")
     ID_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
@@ -570,6 +804,12 @@ class SchematicSymbolInstance(_message.Message):
     SHOW_PIN_NUMBERS_FIELD_NUMBER: _ClassVar[int]
     PIN_NAME_OFFSET_FIELD_NUMBER: _ClassVar[int]
     VARIANTS_FIELD_NUMBER: _ClassVar[int]
+    USER_FIELDS_FIELD_NUMBER: _ClassVar[int]
+    PIN_MAP_OVERRIDE_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_AUTOPLACED_FIELD_NUMBER: _ClassVar[int]
+    LIB_ID_FIELD_NUMBER: _ClassVar[int]
+    PASSTHROUGH_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
     id: _base_types_pb2.KIID
     path: _base_types_pb2.SheetPath
     position: _base_types_pb2.Vector2
@@ -587,8 +827,14 @@ class SchematicSymbolInstance(_message.Message):
     show_pin_names: bool
     show_pin_numbers: bool
     pin_name_offset: _base_types_pb2.Distance
-    variants: _containers.RepeatedCompositeFieldContainer[SchematicSymbolVariant]
-    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., path: _Optional[_Union[_base_types_pb2.SheetPath, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., transform: _Optional[_Union[SchematicSymbolTransform, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., definition: _Optional[_Union[SchematicSymbol, _Mapping]] = ..., reference_field: _Optional[_Union[SchematicField, _Mapping]] = ..., value_field: _Optional[_Union[SchematicField, _Mapping]] = ..., footprint_field: _Optional[_Union[SchematicField, _Mapping]] = ..., datasheet_field: _Optional[_Union[SchematicField, _Mapping]] = ..., description_field: _Optional[_Union[SchematicField, _Mapping]] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., unit: _Optional[_Union[SchematicSymbolUnit, _Mapping]] = ..., body_style: _Optional[_Union[SchematicSymbolBodyStyle, _Mapping]] = ..., show_pin_names: bool = ..., show_pin_numbers: bool = ..., pin_name_offset: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., variants: _Optional[_Iterable[_Union[SchematicSymbolVariant, _Mapping]]] = ...) -> None: ...
+    variants: SchematicSymbolVariants
+    user_fields: _containers.RepeatedCompositeFieldContainer[SchematicField]
+    pin_map_override: PinMapInstanceOverride
+    fields_autoplaced: bool
+    lib_id: _base_types_pb2.LibraryIdentifier
+    passthrough: SchematicPassthroughMode
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., path: _Optional[_Union[_base_types_pb2.SheetPath, _Mapping]] = ..., position: _Optional[_Union[_base_types_pb2.Vector2, _Mapping]] = ..., transform: _Optional[_Union[SchematicSymbolTransform, _Mapping]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., definition: _Optional[_Union[SchematicSymbol, _Mapping]] = ..., reference_field: _Optional[_Union[SchematicField, _Mapping]] = ..., value_field: _Optional[_Union[SchematicField, _Mapping]] = ..., footprint_field: _Optional[_Union[SchematicField, _Mapping]] = ..., datasheet_field: _Optional[_Union[SchematicField, _Mapping]] = ..., description_field: _Optional[_Union[SchematicField, _Mapping]] = ..., attributes: _Optional[_Union[SchematicSymbolAttributes, _Mapping]] = ..., unit: _Optional[_Union[SchematicSymbolUnit, _Mapping]] = ..., body_style: _Optional[_Union[SchematicSymbolBodyStyle, _Mapping]] = ..., show_pin_names: bool = ..., show_pin_numbers: bool = ..., pin_name_offset: _Optional[_Union[_base_types_pb2.Distance, _Mapping]] = ..., variants: _Optional[_Union[SchematicSymbolVariants, _Mapping]] = ..., user_fields: _Optional[_Iterable[_Union[SchematicField, _Mapping]]] = ..., pin_map_override: _Optional[_Union[PinMapInstanceOverride, _Mapping]] = ..., fields_autoplaced: bool = ..., lib_id: _Optional[_Union[_base_types_pb2.LibraryIdentifier, _Mapping]] = ..., passthrough: _Optional[_Union[SchematicPassthroughMode, str]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
 
 class SheetInstance(_message.Message):
     __slots__ = ("path", "name", "filename", "page_number", "children")
@@ -619,3 +865,45 @@ class SchematicNet(_message.Message):
     name: str
     sheets: _containers.RepeatedCompositeFieldContainer[SchematicNetSheetContents]
     def __init__(self, name: _Optional[str] = ..., sheets: _Optional[_Iterable[_Union[SchematicNetSheetContents, _Mapping]]] = ...) -> None: ...
+
+class SchematicTableCell(_message.Message):
+    __slots__ = ("text_box", "column_span", "row_span", "custom_properties")
+    TEXT_BOX_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_SPAN_FIELD_NUMBER: _ClassVar[int]
+    ROW_SPAN_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
+    text_box: SchematicTextBox
+    column_span: int
+    row_span: int
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, text_box: _Optional[_Union[SchematicTextBox, _Mapping]] = ..., column_span: _Optional[int] = ..., row_span: _Optional[int] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
+
+class SchematicTable(_message.Message):
+    __slots__ = ("id", "column_count", "column_widths", "row_heights", "locked", "cells", "external_border", "header_separator", "border_stroke", "row_separators", "column_separators", "separators_stroke", "custom_properties")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_COUNT_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_WIDTHS_FIELD_NUMBER: _ClassVar[int]
+    ROW_HEIGHTS_FIELD_NUMBER: _ClassVar[int]
+    LOCKED_FIELD_NUMBER: _ClassVar[int]
+    CELLS_FIELD_NUMBER: _ClassVar[int]
+    EXTERNAL_BORDER_FIELD_NUMBER: _ClassVar[int]
+    HEADER_SEPARATOR_FIELD_NUMBER: _ClassVar[int]
+    BORDER_STROKE_FIELD_NUMBER: _ClassVar[int]
+    ROW_SEPARATORS_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_SEPARATORS_FIELD_NUMBER: _ClassVar[int]
+    SEPARATORS_STROKE_FIELD_NUMBER: _ClassVar[int]
+    CUSTOM_PROPERTIES_FIELD_NUMBER: _ClassVar[int]
+    id: _base_types_pb2.KIID
+    column_count: int
+    column_widths: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.Distance]
+    row_heights: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.Distance]
+    locked: _base_types_pb2.LockedState
+    cells: _containers.RepeatedCompositeFieldContainer[SchematicTableCell]
+    external_border: TableStrokeMode
+    header_separator: TableStrokeMode
+    border_stroke: _base_types_pb2.StrokeAttributes
+    row_separators: TableStrokeMode
+    column_separators: TableStrokeMode
+    separators_stroke: _base_types_pb2.StrokeAttributes
+    custom_properties: _containers.RepeatedCompositeFieldContainer[_base_types_pb2.CustomProperty]
+    def __init__(self, id: _Optional[_Union[_base_types_pb2.KIID, _Mapping]] = ..., column_count: _Optional[int] = ..., column_widths: _Optional[_Iterable[_Union[_base_types_pb2.Distance, _Mapping]]] = ..., row_heights: _Optional[_Iterable[_Union[_base_types_pb2.Distance, _Mapping]]] = ..., locked: _Optional[_Union[_base_types_pb2.LockedState, str]] = ..., cells: _Optional[_Iterable[_Union[SchematicTableCell, _Mapping]]] = ..., external_border: _Optional[_Union[TableStrokeMode, str]] = ..., header_separator: _Optional[_Union[TableStrokeMode, str]] = ..., border_stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., row_separators: _Optional[_Union[TableStrokeMode, str]] = ..., column_separators: _Optional[_Union[TableStrokeMode, str]] = ..., separators_stroke: _Optional[_Union[_base_types_pb2.StrokeAttributes, _Mapping]] = ..., custom_properties: _Optional[_Iterable[_Union[_base_types_pb2.CustomProperty, _Mapping]]] = ...) -> None: ...
