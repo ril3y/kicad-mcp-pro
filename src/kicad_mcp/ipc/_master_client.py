@@ -62,10 +62,21 @@ class ConnectionError(RuntimeError):  # noqa: A001
 
 
 def default_socket_path() -> str:
-    """Default IPC socket path, mirroring kipy's resolution order."""
+    """Default IPC socket path.
+
+    ``KICAD_API_SOCKET`` (set by KiCad for plugins it launches) wins, then the
+    server's ``kicad_socket_path`` setting, so schematic and board calls reach
+    the same KiCad. Otherwise mirror kipy's platform defaults.
+    """
     override = os.environ.get("KICAD_API_SOCKET")
     if override:
         return override
+    from kicad_mcp.config import get_config
+    from kicad_mcp.kicad.session import ipc_socket_url
+
+    configured = get_config().kicad_socket_path
+    if configured is not None:
+        return ipc_socket_url(configured)
     if platform.system() == "Windows":
         return f"ipc://{gettempdir()}\\kicad\\api.sock"
     home = os.environ.get("HOME")

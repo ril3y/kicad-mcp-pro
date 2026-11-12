@@ -70,7 +70,7 @@ def test_kicad_session_builds_supported_kwargs_and_resets(tmp_path: Path, fake_c
     client = session.client()
 
     assert isinstance(client, FakeClient)
-    assert client.socket_path == str(tmp_path / "api.sock")
+    assert client.socket_path == f"ipc://{tmp_path / 'api.sock'}"
     assert client.kicad_token == credential
     assert client.client_name == "kicad-mcp"
     assert client.timeout_ms == 2500
@@ -207,3 +207,36 @@ def test_reset_connection_closes_cached_client(monkeypatch: pytest.MonkeyPatch) 
     assert calls == ["client_closed", "session_reset"]
     assert connection._kicad is None
     assert connection._session is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("/run/kicad/api.sock", "ipc:///run/kicad/api.sock"),
+        (Path("/run/kicad/api.sock"), "ipc:///run/kicad/api.sock"),
+        ("ipc:///run/kicad/api.sock", "ipc:///run/kicad/api.sock"),
+        (Path("ipc:///run/kicad/api.sock"), "ipc:///run/kicad/api.sock"),
+        ("C:\\Temp\\kicad\\api.sock", "ipc://C:\\Temp\\kicad\\api.sock"),
+        ("ipc://C:\\Temp\\kicad\\api.sock", "ipc://C:\\Temp\\kicad\\api.sock"),
+    ],
+)
+def test_ipc_socket_url_normalizes_paths_and_urls(value: str | Path, expected: str) -> None:
+    from kicad_mcp.kicad.session import ipc_socket_url
+
+    assert ipc_socket_url(value) == expected
+
+
+def test_master_client_uses_configured_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kicad_mcp.config import reset_config
+    from kicad_mcp.ipc._master_client import default_socket_path
+
+    monkeypatch.delenv("KICAD_API_SOCKET", raising=False)
+    monkeypatch.setenv("KICAD_MCP_KICAD_SOCKET_PATH", "ipc:///tmp/kicad11/api.sock")
+    reset_config()
+    try:
+        assert default_socket_path() == "ipc:///tmp/kicad11/api.sock"
+        monkeypatch.setenv("KICAD_API_SOCKET", "ipc:///tmp/plugin/api.sock")
+        assert default_socket_path() == "ipc:///tmp/plugin/api.sock"
+    finally:
+        monkeypatch.delenv("KICAD_MCP_KICAD_SOCKET_PATH")
+        reset_config()

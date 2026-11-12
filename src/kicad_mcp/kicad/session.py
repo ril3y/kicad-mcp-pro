@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -10,6 +11,21 @@ from pathlib import Path
 from typing import Protocol, TypedDict
 
 from ..errors import KiCadBoardNotOpenError, KiCadConnectionTimeoutError, KiCadNotRunningError
+
+
+def ipc_socket_url(value: str | Path) -> str:
+    """Return a KiCad IPC socket setting as the ``ipc://`` URL nng dials.
+
+    Accepts a bare socket path (``/tmp/kicad/api.sock``, ``C:\\...\\api.sock``)
+    or an ``ipc://`` URL, including one a ``Path`` has collapsed to ``ipc:/``.
+    """
+    text = str(value)
+    if not text.startswith("ipc:"):
+        return f"ipc://{text}"
+    rest = text[4:].lstrip("/\\")
+    if re.match(r"^[A-Za-z]:", rest):
+        return f"ipc://{rest}"
+    return f"ipc:///{rest}"
 
 
 class LoggerLike(Protocol):
@@ -109,7 +125,7 @@ class KiCadSession:
         kwargs: KiCadKwargs = {}
 
         if "socket_path" in available and cfg.kicad_socket_path is not None:
-            kwargs["socket_path"] = str(cfg.kicad_socket_path)
+            kwargs["socket_path"] = ipc_socket_url(cfg.kicad_socket_path)
         if "kicad_token" in available and cfg.kicad_token is not None:
             kwargs["kicad_token"] = cfg.kicad_token
         if "client_name" in available:
