@@ -104,7 +104,7 @@ async def test_pcb_board_image_refuses_a_region_off_the_sheet(
         _make_pdf(Path(args[args.index("--output") + 1]))
         return 0, "", ""
 
-    monkeypatch.setattr("kicad_mcp.tools.export._run_cli_variants", fake_run_cli_variants)
+    monkeypatch.setattr("kicad_mcp.tools.export_support._run_cli_variants", fake_run_cli_variants)
     server = build_server("full")
 
     picture = await server.call_tool("pcb_board_image", {"region": "20,20,120,100", "dpi": 72})

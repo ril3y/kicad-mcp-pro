@@ -683,6 +683,7 @@ def _register_profile_components(
         pcb,
         power_integrity,
         project,
+        review,
         routing,
         schematic,
         signal_integrity,
@@ -707,6 +708,7 @@ def _register_profile_components(
         datasheet.register(server)
     if "export" in enabled or "release_export" in enabled:
         export.register(server, include_low_level_exports="export" in enabled)
+        review.register(server)
     if "validation" in enabled:
         validation.register(server)
     if "dfm" in enabled:

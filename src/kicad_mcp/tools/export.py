@@ -510,43 +510,13 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
         Args:
             sheet: Sub-sheet name as in sch_list_sheets(), e.g. "Power 3V3". Empty for
                 the root sheet.
-            dpi: Render resolution, 50-300.
+            dpi: Render resolution, 50-600.
             crop: Optional region as "left,top,right,bottom" fractions of the page, e.g.
                 "0.2,0.2,0.7,0.6", to enlarge the part of the sheet that is drawn on.
         """
-        from . import datasheet as _datasheet
+        from .render_support import render_sheet_png
 
-        if not 50 <= dpi <= 300:
-            raise ValueError("dpi must be between 50 and 300.")
-        sch_file = _get_sch_file()
-        pdf_path = _ensure_output_dir() / "schematic.pdf"
-        code, stdout, stderr = _run_cli_variants(
-            [["sch", "export", "pdf", "--output", str(pdf_path), str(sch_file)]]
-        )
-        if code != 0:
-            raise ValueError(f"Schematic PDF export failed: {stderr or stdout or 'unknown error'}")
-
-        page_number = 1
-        wanted = sheet.strip().strip("/")
-        if wanted:
-            document = _datasheet._open(pdf_path)
-            try:
-                marker = f"/{wanted}/".casefold()
-                matches = [
-                    index + 1
-                    for index in range(len(document))
-                    if marker in _datasheet._page_text(document, index).casefold()
-                ]
-            finally:
-                document.close()
-            if not matches:
-                raise ValueError(
-                    f"No page for sheet {sheet!r} in the exported schematic. "
-                    "Check the name with sch_list_sheets()."
-                )
-            page_number = matches[0]
-        data = _datasheet._render_png(pdf_path, page_number, dpi, crop)
-        return Image(data=data, format="png")
+        return Image(data=render_sheet_png(sheet, dpi, crop), format="png")
 
     @mcp.tool()
     @headless_compatible
@@ -564,46 +534,13 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
             layers: Comma separated layer names, drawn together in the editor's colours.
             region: Area to show as "x1,y1,x2,y2" in board millimetres (the coordinates
                 the placement tools use). Empty shows the whole sheet.
-            dpi: Render resolution, 50-600; raise it for a small region.
+            dpi: Render resolution, 50-2400; use 1500 or more for a region a few
+                centimetres across. The picture is limited to 2000 pixels on its longer
+                side.
         """
-        from . import datasheet as _datasheet
+        from .render_support import render_board_png
 
-        if not 50 <= dpi <= 600:
-            raise ValueError("dpi must be between 50 and 600.")
-        pcb_file = _get_pcb_file()
-        pdf_path = _ensure_output_dir() / "board.pdf"
-        code, stdout, stderr = _run_cli_variants(
-            [
-                ["pcb", "export", "pdf", "--mode-single", "--layers", layers,
-                 "--output", str(pdf_path), str(pcb_file)],
-            ]
-        )  # fmt: skip
-        if code != 0:
-            raise ValueError(f"Board PDF export failed: {stderr or stdout or 'unknown error'}")
-
-        crop = ""
-        if region.strip():
-            try:
-                x1, y1, x2, y2 = (float(part) for part in region.split(","))
-            except ValueError as exc:
-                raise ValueError("region must be 'x1,y1,x2,y2' in millimetres.") from exc
-            document = _datasheet._open(pdf_path)
-            try:
-                width_pt, height_pt = document[0].get_size()
-            finally:
-                document.close()
-            width_mm, height_mm = width_pt * 25.4 / 72, height_pt * 25.4 / 72
-            left, right = sorted((x1 / width_mm, x2 / width_mm))
-            top, bottom = sorted((y1 / height_mm, y2 / height_mm))
-            left, top = max(0.0, left), max(0.0, top)
-            right, bottom = min(1.0, right), min(1.0, bottom)
-            if not (left < right and top < bottom):
-                raise ValueError(
-                    f"region lies outside the {width_mm:.0f} x {height_mm:.0f} mm sheet."
-                )
-            crop = f"{left:.5f},{top:.5f},{right:.5f},{bottom:.5f}"
-        data = _datasheet._render_png(pdf_path, 1, dpi, crop)
-        return Image(data=data, format="png")
+        return Image(data=render_board_png(layers, region, dpi), format="png")
 
     def _export_step(output_path: str = "") -> str:
         pcb_file = _get_pcb_file()

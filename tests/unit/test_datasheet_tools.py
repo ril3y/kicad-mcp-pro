@@ -141,7 +141,7 @@ async def test_sheet_image_renders_exported_schematic(
         _make_pdf(Path(args[args.index("--output") + 1]))
         return 0, "", ""
 
-    monkeypatch.setattr("kicad_mcp.tools.export._run_cli_variants", fake_run_cli_variants)
+    monkeypatch.setattr("kicad_mcp.tools.export_support._run_cli_variants", fake_run_cli_variants)
     server = build_server("full")
 
     result = await server.call_tool("sch_sheet_image", {"dpi": 72, "crop": "0,0,0.5,0.5"})
