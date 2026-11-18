@@ -133,6 +133,10 @@ async def test_grouped_checks_show_items_and_filter_by_reference(
     assert "/Power/: Symbol U1 Pin 4" in schematic
     assert "- [error] about clearance" in flat
 
+    only = await call_tool_text(server, "run_drc", {"types": ["silk_overlap"]})
+    assert "silk_overlap x2" in only and "Footprint R10" in only
+    assert "clearance x1" not in only and "Unrouted connections" not in only
+
 
 @pytest.mark.anyio
 async def test_dev_tools_are_off_by_default(

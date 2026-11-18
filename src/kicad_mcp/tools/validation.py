@@ -1788,6 +1788,7 @@ def register(mcp: FastMCP) -> None:
         save_report: bool = False,
         group: bool = False,
         references: list[str] | None = None,
+        types: list[str] | None = None,
     ) -> str:
         """Run PCB design rule checks.
 
@@ -1799,6 +1800,9 @@ def register(mcp: FastMCP) -> None:
             references: Limit the grouped results to violations and unrouted
                 connections that involve these reference designators, e.g. the parts
                 of one block. Implies ``group``.
+            types: Show only these violation types, every one of them, e.g.
+                ["courtyards_overlap", "shorting_items"]; add "unrouted" to list the
+                unrouted connections too. Implies ``group``.
         """
         path, report, error = _run_drc_report("drc_report.json")
         if report is None:
@@ -1813,7 +1817,7 @@ def register(mcp: FastMCP) -> None:
             f"- Unconnected items: {len(unconnected)}",
             f"- Courtyard issues: {len(courtyard)}",
         ]
-        if group or references:
+        if group or references or types:
             wanted = {ref.strip() for ref in references or [] if ref.strip()}
             if wanted:
                 violations = [entry for entry in violations if _mentions(entry, wanted)]
@@ -1822,7 +1826,18 @@ def register(mcp: FastMCP) -> None:
                     f"Limited to {', '.join(sorted(wanted))}: {len(violations)} violation(s), "
                     f"{len(unconnected)} unrouted connection(s)."
                 )
-            lines.append(_format_grouped("Violations", [("", entry) for entry in violations]))
+            only = {name.strip() for name in types or [] if name.strip()}
+            if only:
+                violations = [entry for entry in violations if str(entry.get("type")) in only]
+                if "unrouted" not in only:
+                    unconnected = []
+            lines.append(
+                _format_grouped(
+                    "Violations",
+                    [("", entry) for entry in violations],
+                    max_per_type=10_000 if only else 6,
+                )
+            )
             if unconnected:
                 lines.append(f"Unrouted connections ({len(unconnected)}):")
                 for entry in unconnected[:40]:
