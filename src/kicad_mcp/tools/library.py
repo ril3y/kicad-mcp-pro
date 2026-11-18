@@ -12,6 +12,7 @@ from typing import Any, cast
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_config
+from ..utils import symbol_library
 from ..utils.cache import ttl_cache
 from ..utils.component_search import (
     ComponentRecord,
@@ -53,35 +54,46 @@ def _footprint_library_dir() -> Path:
     return cfg.footprint_library_dir
 
 
+def _index_entries(library: str, content: str) -> dict[str, dict[str, str]]:
+    entries: dict[str, dict[str, str]] = {}
+    for match in re.finditer(r'\(symbol\s+"([^"]+)"', content):
+        symbol_name = match.group(1)
+        if re.search(r"_\d+_\d+$", symbol_name):
+            continue
+        description_match = re.search(
+            rf'\(symbol\s+"{re.escape(symbol_name)}".*?\(property\s+"Description"\s+"([^"]*)"',
+            content,
+            re.DOTALL,
+        )
+        keyword_match = re.search(
+            rf'\(symbol\s+"{re.escape(symbol_name)}".*?\(property\s+"ki_keywords"\s+"([^"]*)"',
+            content,
+            re.DOTALL,
+        )
+        entries[f"{library}:{symbol_name}"] = {
+            "library": library,
+            "name": symbol_name,
+            "description": description_match.group(1) if description_match else "",
+            "keywords": keyword_match.group(1) if keyword_match else "",
+        }
+    return entries
+
+
 def _build_symbol_index() -> dict[str, dict[str, str]]:
     index: dict[str, dict[str, str]] = {}
-    for sym_file in _symbol_library_dir().glob("*.kicad_sym"):
-        library = sym_file.stem
-        try:
-            content = sym_file.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+    root = _symbol_library_dir()
+    for library in symbol_library.library_names(root):
+        path = symbol_library.library_path(root, library)
+        if path is None:
             continue
-        for match in re.finditer(r'\(symbol\s+"([^"]+)"', content):
-            symbol_name = match.group(1)
-            if re.search(r"_\d+_\d+$", symbol_name):
+        # A KiCad 11 folder library is indexed one symbol file at a time, which keeps
+        # the per-symbol searches below short.
+        for sym_file in symbol_library.symbol_files(path):
+            try:
+                content = sym_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
                 continue
-            key = f"{library}:{symbol_name}"
-            description_match = re.search(
-                rf'\(symbol\s+"{re.escape(symbol_name)}".*?\(property\s+"Description"\s+"([^"]*)"',
-                content,
-                re.DOTALL,
-            )
-            keyword_match = re.search(
-                rf'\(symbol\s+"{re.escape(symbol_name)}".*?\(property\s+"ki_keywords"\s+"([^"]*)"',
-                content,
-                re.DOTALL,
-            )
-            index[key] = {
-                "library": library,
-                "name": symbol_name,
-                "description": description_match.group(1) if description_match else "",
-                "keywords": keyword_match.group(1) if keyword_match else "",
-            }
+            index.update(_index_entries(library, content))
     return index
 
 
@@ -95,10 +107,10 @@ def _get_symbol_index() -> dict[str, dict[str, str]]:
 
 
 def _read_symbol_file(library: str) -> str | None:
-    path = _symbol_library_dir() / f"{library}.kicad_sym"
-    if not path.exists():
+    path = symbol_library.library_path(_symbol_library_dir(), library)
+    if path is None:
         return None
-    return path.read_text(encoding="utf-8", errors="ignore")
+    return symbol_library.read_library_text(path)
 
 
 def _expand_kicad_lib_uri_envvars(uri: str, project_dir: Path) -> str:
@@ -348,7 +360,7 @@ def register(mcp: FastMCP) -> None:
     @headless_compatible
     def lib_list_libraries() -> str:
         """List configured symbol and footprint libraries."""
-        symbol_libs = sorted(path.stem for path in _symbol_library_dir().glob("*.kicad_sym"))
+        symbol_libs = symbol_library.library_names(_symbol_library_dir())
         footprint_libs = sorted(path.name for path in _footprint_library_dir().glob("*.pretty"))
         lines = [f"Symbol libraries ({len(symbol_libs)} total):"]
         lines.extend(f"- {name}" for name in symbol_libs[:50])

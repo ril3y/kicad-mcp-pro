@@ -231,6 +231,8 @@ def discover_library_paths(cli_path: Path) -> dict[str, Path | None]:
         ]
         candidates.extend(parents)
         candidates.extend(parent / "share" / "kicad" for parent in parents)
+        # macOS bundle: <app>/Contents/MacOS/kicad-cli beside <app>/Contents/SharedSupport.
+        candidates.extend(parent / "SharedSupport" for parent in parents)
 
     system = platform.system()
     if system == "Windows":
@@ -278,6 +280,8 @@ def _kicad_config_dirs() -> list[Path]:
         ]
     if system == "Darwin":
         return [
+            Path.home() / "Library" / "Preferences" / "kicad" / "11.0",
+            Path.home() / "Library" / "Preferences" / "kicad" / "10.99",
             Path.home() / "Library" / "Preferences" / "kicad" / "10.0",
             Path.home() / "Library" / "Preferences" / "kicad" / "9.0",
         ]

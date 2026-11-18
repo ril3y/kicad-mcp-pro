@@ -58,6 +58,7 @@ from ..models.schematic import (
     TraceNetInput,
     UpdatePropertiesInput,
 )
+from ..utils import symbol_library
 from ..utils.cache import clear_ttl_cache, ttl_cache
 from ..utils.schematic_router import RouterBBox, SchematicRouter
 from ..utils.sexpr import (
@@ -1937,13 +1938,16 @@ def _symbol_file(library: str) -> Path:
             # Try the URI itself first, then fall back to URI/library.kicad_sym
             # for compatibility with directory-style entries.
             candidate = Path(uri)
-            if candidate.exists() and candidate.suffix == ".kicad_sym":
+            if symbol_library.is_library(candidate):
                 return candidate
             directory_candidate = candidate / f"{library}.kicad_sym"
             if directory_candidate.exists():
                 return directory_candidate
     if cfg.symbol_library_dir is None or not cfg.symbol_library_dir.exists():
         raise FileNotFoundError("No KiCad symbol library directory is configured.")
+    stock = symbol_library.library_path(cfg.symbol_library_dir, library)
+    if stock is not None:
+        return stock
     return cfg.symbol_library_dir / f"{library}.kicad_sym"
 
 
@@ -2012,7 +2016,7 @@ def _load_symbol_blocks(library: str, symbol_name: str) -> list[str]:
     except FileNotFoundError:
         sym_file = None
     if sym_file is not None and sym_file.exists():
-        content = sym_file.read_text(encoding="utf-8", errors="ignore")
+        content = symbol_library.read_library_text(sym_file)
         blocks = _collect_symbol_blocks(content, symbol_name)
         if blocks:
             return blocks
