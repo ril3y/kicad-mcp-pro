@@ -294,3 +294,16 @@ async def test_block_tools_take_only_what_lies_inside(
     deleted = await call_tool_text(server, "pcb_delete_block_copper", box)
     assert "Deleted 1 tracks, 1 vias, 0 zones" in deleted
     assert set(board.removed) == {"t-in", "v-in"}
+
+
+def test_only_parentless_headless_servers_count_as_orphans() -> None:
+    from kicad_mcp.ipc import headless
+
+    listing = """
+  100     1 /K/kicad-cli api-server --socket /tmp/kmcp-old1/board.sock /p/a.kicad_pcb
+  101   900 /K/kicad-cli api-server --socket /tmp/kmcp-live/board.sock /p/a.kicad_pcb
+  102     1 /K/kicad /p/a.kicad_pro
+  103     1 /usr/bin/python other --socket /tmp/kmcp-x/board.sock
+"""
+    expected = Path("/tmp/kmcp-old1")  # noqa: S108 - a path in test text, nothing is created
+    assert headless.orphaned_servers(listing) == [(100, expected)]

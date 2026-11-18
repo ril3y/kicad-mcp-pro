@@ -3969,6 +3969,7 @@ def register(mcp: FastMCP) -> None:
         block to another part of the board without redoing it. Refill the zones
         afterwards (pcb_refill_zones). Nothing is saved until pcb_save().
         """
+        hint = _PERSISTENCE_HINT
         left, right = sorted((x1_mm, x2_mm))
         top, bottom = sorted((y1_mm, y2_mm))
 
@@ -4012,7 +4013,7 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as live:
             live.update_items(cast(list[BoardItem], moved))
         summary = ", ".join(f"{count} {kind}" for kind, count in counts.items())
-        return f"Moved {summary} by ({dx_mm}, {dy_mm}) mm. {_PERSISTENCE_HINT}"
+        return f"Moved {summary} by ({dx_mm}, {dy_mm}) mm. {hint}"
 
     @mcp.tool()
     def pcb_delete_block_copper(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> str:
@@ -4021,6 +4022,7 @@ def register(mcp: FastMCP) -> None:
         Footprints are kept. Use it before laying a block out again somewhere else.
         Nothing is saved until pcb_save().
         """
+        hint = _PERSISTENCE_HINT
         left, right = sorted((x1_mm, x2_mm))
         top, bottom = sorted((y1_mm, y2_mm))
 
@@ -4050,7 +4052,7 @@ def register(mcp: FastMCP) -> None:
         with board_transaction() as live:
             live.remove_items_by_id(doomed)
         summary = ", ".join(f"{count} {kind}" for kind, count in counts.items())
-        return f"Deleted {summary}. {_PERSISTENCE_HINT}"
+        return f"Deleted {summary}. {hint}"
 
     @mcp.tool()
     @requires_kicad_running

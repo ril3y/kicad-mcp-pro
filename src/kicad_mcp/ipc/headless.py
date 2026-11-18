@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
+import shutil
+import signal
 import subprocess  # noqa: S404 - runs the configured kicad-cli only
 import tempfile
 import threading
@@ -104,8 +107,10 @@ def socket_for(kind: Kind) -> str:
             raise RuntimeError("Headless mode needs kicad-cli (KICAD_MCP_KICAD_CLI).")
         if _socket_dir is None:
             # Unix socket paths are limited to about 100 characters; keep this one short.
+            _reap_orphans()
             _socket_dir = Path(tempfile.mkdtemp(prefix="kmcp-", dir="/tmp"))  # noqa: S108
             atexit.register(stop_all)
+            _stop_on_signals()
         socket_path = _socket_dir / f"{kind}.sock"
         socket_path.unlink(missing_ok=True)
         process = subprocess.Popen(  # noqa: S603 - fixed argv
@@ -152,10 +157,71 @@ def stop(kind: Kind) -> None:
 
 
 def stop_all() -> None:
-    """Stop every headless server this process started."""
+    """Stop every headless server this process started and remove its socket folder."""
+    global _socket_dir
     with _lock:
         for kind in list(_servers):
             _stop(kind)
+        if _socket_dir is not None:
+            shutil.rmtree(_socket_dir, ignore_errors=True)
+            _socket_dir = None
+
+
+def _stop_on_signals() -> None:
+    """Stop the headless servers when this process is told to end.
+
+    A client that reconnects ends the old MCP server with a signal, which skips
+    ``atexit``; without this the KiCad processes live on as orphans (macOS shows
+    each as a KiCad application that is "not responding").
+    """
+
+    def handler(signum: int, _frame: object) -> None:
+        stop_all()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(signum, handler)
+        except (ValueError, OSError):  # not the main thread, or not allowed
+            return
+
+
+def orphaned_servers(listing: str) -> list[tuple[int, Path]]:
+    """Pick the leftover headless servers out of ``ps -axo pid=,ppid=,command=`` output.
+
+    A leftover is a ``kicad-cli api-server`` on one of our sockets whose parent
+    process is gone (parent id 1).
+    """
+    found: list[tuple[int, Path]] = []
+    for line in listing.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit() or parts[1] != "1":
+            continue
+        match = re.search(r"api-server --socket (/tmp/kmcp-[^/\s]+)/\w+\.sock", parts[2])
+        if match and "kicad-cli" in parts[2]:
+            found.append((int(parts[0]), Path(match.group(1))))
+    return found
+
+
+def _reap_orphans() -> None:
+    """End headless servers left behind by an MCP server that was killed."""
+    try:
+        listing = subprocess.run(  # noqa: S603 - fixed argv
+            ["/bin/ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    for pid, folder in orphaned_servers(listing):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def status() -> dict[str, str]:

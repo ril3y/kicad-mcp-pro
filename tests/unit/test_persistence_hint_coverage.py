@@ -52,6 +52,8 @@ _IPC_MUTATING_TOOLS = [
     "pcb_delete_items",
     "pcb_move_footprint",
     "pcb_apply_placement_spec",
+    "pcb_move_block",
+    "pcb_delete_block_copper",
     "pcb_set_footprint_layer",
     "pcb_set_footprint_attributes",
     "pcb_add_zone",
