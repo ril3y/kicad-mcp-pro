@@ -217,7 +217,12 @@ def set_net_classes(
     from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import MapMergeMode
 
     client = client or MasterKiCadClient()
-    project = _board_document(client).project
+    project = type(_board_document(client).project)()
+    project.CopyFrom(_board_document(client).project)
+    if project.path and not project.path.endswith("/"):
+        # KiCad compares against its own project path, which ends in a slash, and
+        # answers "not open at path" for the form GetOpenDocuments reports.
+        project.path += "/"
 
     request = commands.GetNetClasses()
     request.project.CopyFrom(project)
