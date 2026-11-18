@@ -3955,6 +3955,76 @@ def register(mcp: FastMCP) -> None:
         return outcome
 
     @mcp.tool()
+    def pcb_route_map(
+        at: str,
+        net: str = "",
+        layer: str = "F_Cu",
+        radius_mm: float = 1.5,
+        width_mm: float = 0.0,
+        cell_mm: float = 0.1,
+    ) -> str:
+        """Show where a track of a net may go around a point, as KiCad's rules see it.
+
+        Prints two character maps of the area: with every other net's copper, and
+        with only pads, holes, keepouts and the board edge. "#" is not allowed,
+        "." allowed, "S" the point. A cell free in the second map but not the first
+        is blocked only by tracks, which rip-up could clear. Draws nothing.
+
+        Args:
+            at: A pad as "U5.6" or a point "x,y" in mm.
+            net: Net name; taken from the pad when ``at`` is a pad.
+            layer: Copper layer to show.
+            radius_mm: Half the size of the area shown.
+            width_mm: Track width; 0 uses the net's own.
+            cell_mm: Grid pitch.
+        """
+        from ..ipc.route import clearance_map
+
+        try:
+            x, y, _ = _route_point(at, layer)
+        except ValueError as exc:
+            return str(exc)
+        net_name = net or _net_at(at)
+        if not net_name:
+            return "Give the net name for a point."
+        maps = []
+        for ignore in (False, True):
+            maps.append(
+                clearance_map(
+                    net_name,
+                    [layer],
+                    cell_mm=cell_mm,
+                    width_mm=width_mm,
+                    include_vias=False,
+                    ignore_tracks=ignore,
+                )  # fmt: skip
+            )
+        cell = maps[0]["cell"]
+        origin_x, origin_y = maps[0]["origin"]
+        columns, rows = maps[0]["columns"], maps[0]["rows"]
+        centre_column = int(round((x - origin_x) / cell))
+        centre_row = int(round((y - origin_y) / cell))
+        span = int(radius_mm / cell)
+        out = [
+            f"{net_name} on {layer}, track {maps[0]['track_width']:.2f} mm, cell {cell} mm, "
+            f"centre ({x:.3f}, {y:.3f}); left: all copper, right: pads and holes only"
+        ]
+        for row in range(centre_row - span, centre_row + span + 1):
+            halves = []
+            for grid in maps:
+                text = ""
+                for column in range(centre_column - span, centre_column + span + 1):
+                    if not (0 <= column < columns and 0 <= row < rows):
+                        text += " "
+                    elif (column, row) == (centre_column, centre_row):
+                        text += "S"
+                    else:
+                        text += "#" if grid["blocked"][layer][row * columns + column] else "."
+                halves.append(text)
+            out.append("   ".join(halves))
+        return "\n".join(out)
+
+    @mcp.tool()
     def pcb_route_connection(
         start: str,
         end: str,
