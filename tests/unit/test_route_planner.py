@@ -107,3 +107,13 @@ def test_keep_away_area_bends_the_path() -> None:
 
     assert straight is not None and all(row == 4 for _, _, row in straight.cells)
     assert bent is not None and (0, 5, 4) not in bent.cells
+
+
+def test_route_tools_are_registered() -> None:
+    """pcb_route_connection, pcb_route_open and pcb_route_map are on the server."""
+    import asyncio
+
+    from kicad_mcp.server import build_server
+
+    names = {tool.name for tool in asyncio.run(build_server("full").list_tools())}
+    assert {"pcb_route_connection", "pcb_route_open", "pcb_route_map", "pcb_route_track"} <= names
