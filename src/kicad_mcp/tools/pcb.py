@@ -4136,7 +4136,8 @@ def register(mcp: FastMCP) -> None:
         )
         if counts and remaining > counts[0] and snapshot is not None:
             lines.append(
-                f"That is more than the {counts[0]} at the start. The board as it was is at {snapshot}."
+                f"That is more than the {counts[0]} at the start. "
+                f"The board as it was is at {snapshot}."
             )
         elif counts:
             lines.append(f"At the start: {counts[0]}.")
