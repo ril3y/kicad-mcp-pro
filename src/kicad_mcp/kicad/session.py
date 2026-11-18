@@ -124,7 +124,12 @@ class KiCadSession:
         available = self._constructor_params()
         kwargs: KiCadKwargs = {}
 
-        if "socket_path" in available and cfg.kicad_socket_path is not None:
+        from ..ipc import headless
+
+        if "socket_path" in available and headless.enabled():
+            # The kipy client is used for the board; give it the board's headless server.
+            kwargs["socket_path"] = headless.socket_for("board")
+        elif "socket_path" in available and cfg.kicad_socket_path is not None:
             kwargs["socket_path"] = ipc_socket_url(cfg.kicad_socket_path)
         if "kicad_token" in available and cfg.kicad_token is not None:
             kwargs["kicad_token"] = cfg.kicad_token

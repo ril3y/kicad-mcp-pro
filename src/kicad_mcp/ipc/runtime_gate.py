@@ -226,6 +226,16 @@ def _connected_kicad_has_fix(kicad_factory: _KiCadFactory | None = None) -> bool
             return _version_cache
 
     if kicad_factory is None:
+        from . import headless
+
+        if headless.enabled():
+            # ``kicad-cli api-server`` exists only in builds that have the fix, and it
+            # does not answer GetVersion.
+            with _cache_lock:
+                _version_cache = True
+            return True
+
+    if kicad_factory is None:
         # Direct master client — kipy is deliberately NOT imported here
         # because it ships older proto descriptors that collide with our
         # vendored master stubs in the global protobuf descriptor pool.

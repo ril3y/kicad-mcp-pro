@@ -98,6 +98,11 @@ class MasterKiCadClient:
     """
 
     def __init__(self, socket_path: str | None = None, *, timeout_ms: int = 5_000) -> None:
+        from . import headless
+
+        # In headless mode each command goes to the server for its document, so the
+        # socket is chosen per send() unless the caller named one.
+        self._per_command_socket = socket_path is None and headless.enabled()
         self.socket_path = socket_path or default_socket_path()
         self.timeout_ms = timeout_ms
 
@@ -107,6 +112,10 @@ class MasterKiCadClient:
         Raises :class:`ApiError` on non-success status,
         :class:`ConnectionError` on socket failure.
         """
+        if self._per_command_socket:
+            from . import headless
+
+            self.socket_path = headless.socket_for(headless.kind_of(command))
         env = ApiRequest()
         env.message.Pack(command)
         sock = pynng.Req0(recv_timeout=self.timeout_ms, send_timeout=self.timeout_ms)
