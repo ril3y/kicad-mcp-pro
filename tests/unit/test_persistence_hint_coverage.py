@@ -53,6 +53,8 @@ _IPC_MUTATING_TOOLS = [
     "pcb_move_footprint",
     "pcb_apply_placement_spec",
     "pcb_move_block",
+    "pcb_route_connection",
+    "pcb_route_open",
     "pcb_route_track",
     "pcb_import_routes",
     "pcb_set_net_classes",

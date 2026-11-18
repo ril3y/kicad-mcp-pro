@@ -3769,6 +3769,326 @@ def register(mcp: FastMCP) -> None:
         lines.append(hint)
         return "\n".join(lines)
 
+    def _route_point(text: str, layer: str) -> tuple[float, float, str]:
+        text = text.strip()
+        if "," in text:
+            x_text, y_text = text.split(",", 1)
+            return float(x_text), float(y_text), layer
+        reference, _, number = text.partition(".")
+        for pad, pad_reference in _iter_board_pads_with_refs():
+            if pad_reference == reference and str(pad.number) == number:
+                return (
+                    nm_to_mm(_coord_nm(pad.position, "x")),
+                    nm_to_mm(_coord_nm(pad.position, "y")),
+                    layer,
+                )
+        raise ValueError(f"pad {text!r} was not found on the board")
+
+    def _net_at(text: str) -> str:
+        reference, _, number = text.strip().partition(".")
+        for pad, pad_reference in _iter_board_pads_with_refs():
+            if pad_reference == reference and str(pad.number) == number:
+                return str(pad.net.name)
+        return ""
+
+    def _rip_up(
+        places: list[tuple[str, float, float]], keep: set[str], reach_mm: float
+    ) -> list[str]:
+        """Delete other nets' tracks and vias lying on the given places; return their nets."""
+        board = get_board()
+        doomed: list[Any] = []
+        nets: set[str] = set()
+
+        def near(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+            dx, dy = bx - ax, by - ay
+            span = dx * dx + dy * dy
+            along = (
+                0.0 if span == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / span))
+            )
+            return ((px - ax - along * dx) ** 2 + (py - ay - along * dy) ** 2) ** 0.5
+
+        for track in cast(Iterable[Any], board.get_tracks()):
+            name = str(track.net.name)
+            if name in keep:
+                continue
+            layer = BoardLayer.Name(track.layer).removeprefix("BL_")
+            ax, ay = nm_to_mm(track.start.x), nm_to_mm(track.start.y)
+            bx, by = nm_to_mm(track.end.x), nm_to_mm(track.end.y)
+            limit = reach_mm + nm_to_mm(track.width) / 2
+            if any(
+                place[0] == layer and near(place[1], place[2], ax, ay, bx, by) < limit
+                for place in places
+            ):
+                doomed.append(track.id)
+                nets.add(name)
+        for via in cast(Iterable[Any], board.get_vias()):
+            name = str(via.net.name)
+            if name in keep:
+                continue
+            vx, vy = nm_to_mm(via.position.x), nm_to_mm(via.position.y)
+            if any(
+                ((place[1] - vx) ** 2 + (place[2] - vy) ** 2) ** 0.5 < reach_mm + 0.3
+                for place in places
+            ):
+                doomed.append(via.id)
+                nets.add(name)
+        if doomed:
+            with board_transaction() as live:
+                live.remove_items_by_id(doomed)
+        return sorted(nets)
+
+    def _route_connection(
+        net: str,
+        first: tuple[float, float, str],
+        last: tuple[float, float, str],
+        *,
+        layer_costs: dict[str, float],
+        via_cost_mm: float,
+        avoid: list[dict[str, float]] | None,
+        rip_up: bool,
+        keep_nets: set[str],
+        width_mm: float,
+        cell_mm: float,
+    ) -> dict[str, Any]:
+        """Plan one connection and have KiCad's router draw it; never raises."""
+        from ..ipc.route import plan_connection, route_track
+
+        outcome: dict[str, Any] = {"ok": False, "ripped": [], "reason": ""}
+        try:
+            plan = plan_connection(
+                net,
+                first,
+                last,
+                layer_costs=layer_costs,
+                via_cost_mm=via_cost_mm,
+                avoid=avoid,
+                rip_up=rip_up,
+                width_mm=width_mm,
+                cell_mm=cell_mm,
+            )
+            if not plan["ok"] and width_mm == 0 and plan.get("width", 0) > 0.21:
+                # A wide net often cannot leave a fine-pitch pad; plan it at 0.2 mm.
+                width_mm = 0.2
+                plan = plan_connection(
+                    net,
+                    first,
+                    last,
+                    layer_costs=layer_costs,
+                    via_cost_mm=via_cost_mm,
+                    avoid=avoid,
+                    rip_up=rip_up,
+                    width_mm=width_mm,
+                    cell_mm=cell_mm,
+                )
+            if not plan["ok"]:
+                outcome["reason"] = plan["reason"]
+                return outcome
+            if plan["through"]:
+                outcome["ripped"] = _rip_up(
+                    plan["through"], keep_nets | {net}, plan["width"] / 2 + 0.2
+                )
+            last_error = ""
+            for shove in (False, True):
+                try:
+                    done = route_track(
+                        (first[0], first[1]),
+                        (last[0], last[1]),
+                        first[2],
+                        waypoints=plan["waypoints"],
+                        shove=shove,
+                        width_mm=width_mm,
+                    )
+                except Exception as exc:  # noqa: BLE001 - try the next way
+                    last_error = str(exc)
+                    continue
+                outcome.update(
+                    ok=bool(done["reached_end"]),
+                    tracks=len(done["tracks"]),
+                    vias=len(done["vias"]),
+                    length_mm=plan["length_mm"],
+                    shove=shove,
+                )
+                if not outcome["ok"]:
+                    outcome["reason"] = "the router stopped short of the end"
+                return outcome
+            outcome["reason"] = (
+                f"planned ({plan['length_mm']} mm, {plan['vias']} via) but not drawn: {last_error}"
+            )
+        except Exception as exc:  # noqa: BLE001 - report, do not stop a batch
+            outcome["reason"] = str(exc)
+        return outcome
+
+    @mcp.tool()
+    def pcb_route_connection(
+        start: str,
+        end: str,
+        net: str = "",
+        start_layer: str = "F_Cu",
+        end_layer: str = "",
+        layer_costs: dict[str, float] | None = None,
+        via_cost_mm: float = 3.0,
+        avoid: list[dict[str, float]] | None = None,
+        rip_up: bool = False,
+        keep_nets: list[str] | None = None,
+        width_mm: float = 0.0,
+        cell_mm: float = 0.1,
+    ) -> str:
+        """Plan and route one connection: around parts, through vias, under on other layers.
+
+        A planner first finds the cheapest way over grids that KiCad computes with
+        its own rules (where a track or via of this net may go on each layer);
+        KiCad's interactive router then draws it. Needs a KiCad build that serves
+        GetRoutingClearanceMap and RouteTrack. Nothing is saved until pcb_save().
+
+        Args:
+            start: A pad as "R24.1", or a point "x,y" in mm lying on copper of the net.
+            end: The same for the other end.
+            net: Net name; needed only when both ends are given as points.
+            start_layer: Layer of the start item. end_layer defaults to the same.
+            layer_costs: Layers the route may use and how dear each is, e.g.
+                {"F_Cu": 1, "B_Cu": 1.1, "In2_Cu": 4}; a layer left out or set to 0
+                is not used. Default: F_Cu and B_Cu at 1.
+            via_cost_mm: A via counts as this much extra track.
+            avoid: Keep-away areas, each {"x", "y", "radius_mm", "cost_mm"}: the
+                route bends away from them when it can.
+            rip_up: When no free way exists, cross other nets' tracks and delete
+                those pieces (their nets are named in the answer and then need
+                routing again). Pads, holes and the board edge are never crossed.
+            keep_nets: Nets whose tracks rip_up must not touch.
+            width_mm: Track width; 0 uses the net's own.
+            cell_mm: Grid pitch of the plan.
+        """
+        hint = _PERSISTENCE_HINT
+        try:
+            first = _route_point(start, start_layer)
+            last = _route_point(end, end_layer or start_layer)
+        except ValueError as exc:
+            return f"Not routed: {exc}"
+        net_name = net or _net_at(start) or _net_at(end)
+        if not net_name:
+            return "Not routed: give the net name when both ends are points."
+        result = _route_connection(
+            net_name,
+            first,
+            last,
+            layer_costs=layer_costs or {"F_Cu": 1.0, "B_Cu": 1.0},
+            via_cost_mm=via_cost_mm,
+            avoid=avoid,
+            rip_up=rip_up,
+            keep_nets=set(keep_nets or []),
+            width_mm=width_mm,
+            cell_mm=cell_mm,
+        )
+        ripped = f" Ripped up pieces of: {', '.join(result['ripped'])}." if result["ripped"] else ""
+        if not result["ok"]:
+            return f"Not routed ({net_name}): {result['reason']}.{ripped}"
+        return (
+            f"Routed {net_name}: {result['tracks']} track piece(s), {result['vias']} via(s), "
+            f"about {result['length_mm']} mm{', with shove' if result['shove'] else ''}."
+            f"{ripped} {hint}"
+        )
+
+    @mcp.tool()
+    def pcb_route_open(
+        layer_costs: dict[str, float] | None = None,
+        via_cost_mm: float = 3.0,
+        avoid: list[dict[str, float]] | None = None,
+        rip_up: bool = True,
+        keep_nets: list[str] | None = None,
+        only_nets: list[str] | None = None,
+        max_connections: int = 40,
+        passes: int = 3,
+        cell_mm: float = 0.1,
+    ) -> str:
+        """Route every open connection the rule check reports, one by one.
+
+        Saves the board, reads the open connections from KiCad's rule check, and
+        runs the planner and KiCad's router on each (see pcb_route_connection for
+        the arguments). A connection with no free way is tried again with rip-up
+        when ``rip_up`` is set; ripped nets come back as open connections in the
+        next pass. The board is saved after each pass, and the answer lists what
+        was routed, what was ripped and what is still open.
+
+        Args:
+            only_nets: Route only these nets.
+            max_connections: Stop a pass after this many attempts.
+            passes: How many times to re-read the open connections and try again.
+        """
+        hint = _PERSISTENCE_HINT
+        from .validation import _entries, _item_texts, _run_drc_report
+
+        costs = layer_costs or {"F_Cu": 1.0, "B_Cu": 1.0}
+        keep = set(keep_nets or [])
+        save = cast(Callable[[], None], get_board().save)
+        lines: list[str] = []
+        still: list[str] = []
+        for round_number in range(1, max(1, passes) + 1):
+            save()
+            _, report, error = _run_drc_report("drc_report.json")
+            if report is None:
+                return f"Could not read the open connections: {error}"
+            opens = _entries(report, "unconnected_items")
+            jobs: list[tuple[str, tuple[float, float, str], tuple[float, float, str], str]] = []
+            for entry in opens:
+                items = [item for item in entry.get("items", []) if isinstance(item, dict)]
+                if len(items) != 2:
+                    continue
+                ends: list[tuple[float, float, str]] = []
+                net_name = ""
+                for item in items:
+                    text = str(item.get("description", ""))
+                    found = re.search(r"\[([^\]]+)\]", text)
+                    net_name = found.group(1) if found else net_name
+                    on = re.search(r" on ([A-Za-z0-9]+\.Cu)", text)
+                    layer = on.group(1).replace(".", "_") if on else "F_Cu"
+                    spot = item.get("pos", {})
+                    ends.append((float(spot.get("x", 0)), float(spot.get("y", 0)), layer))
+                if only_nets and net_name not in only_nets:
+                    continue
+                jobs.append((net_name, ends[0], ends[1], " <-> ".join(_item_texts(entry))))
+            if not jobs:
+                still = []
+                break
+            routed = 0
+            still = []
+            for net_name, first, last, label in jobs[:max_connections]:
+                result = _route_connection(
+                    net_name, first, last,
+                    layer_costs=costs, via_cost_mm=via_cost_mm, avoid=avoid,
+                    rip_up=False, keep_nets=keep, width_mm=0.0, cell_mm=cell_mm,
+                )  # fmt: skip
+                if not result["ok"] and rip_up:
+                    result = _route_connection(
+                        net_name, first, last,
+                        layer_costs=costs, via_cost_mm=via_cost_mm, avoid=avoid,
+                        rip_up=True, keep_nets=keep, width_mm=0.0, cell_mm=cell_mm,
+                    )  # fmt: skip
+                if result["ok"]:
+                    routed += 1
+                    note = f"{result['vias']} via(s), about {result['length_mm']} mm"
+                    if result["ripped"]:
+                        note += f", ripped up pieces of {', '.join(result['ripped'])}"
+                    lines.append(f"  pass {round_number}: routed {net_name} ({note})")
+                else:
+                    still.append(f"  {net_name}: {result['reason']} [{label}]")
+            lines.append(
+                f"Pass {round_number}: {routed} of {len(jobs[:max_connections])} "
+                "open connections routed."
+            )
+            if routed == 0:
+                break
+        save()
+        _, report, error = _run_drc_report("drc_report.json")
+        remaining = len(_entries(report, "unconnected_items")) if report else -1
+        lines.append(
+            f"Open connections now: {remaining if remaining >= 0 else 'unknown'}. Board saved."
+        )
+        if still:
+            lines.append("Not routed in the last pass:")
+            lines.extend(still[:25])
+        del hint
+        return "\n".join(lines)
+
     @mcp.tool()
     def pcb_import_routes(ses_path: str = "output/routing/board.ses") -> str:
         """Bring an autorouter's result (Specctra .ses) onto the board as tracks and vias.
