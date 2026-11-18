@@ -2678,7 +2678,31 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def pcb_get_pads() -> str:
+    def pcb_get_pads(references: list[str] | None = None, max_pads: int = 0) -> str:
+        """List board pads with their nets and positions.
+
+        Args:
+            references: Only the pads of these parts, e.g. ["U2", "C8"]; all of
+                them are listed. Without it the listing is of the whole board and
+                is cut at the server's usual limit.
+            max_pads: Cut the listing after this many pads (0 = no extra limit).
+        """
+        text = _all_pads_text(unlimited=bool(references))
+        if not references:
+            lines = text.splitlines()
+        else:
+            wanted = {reference.strip() for reference in references if reference.strip()}
+            body = [
+                line
+                for line in text.splitlines()[1:]
+                if line.split(". ", 1)[-1].split(":", 1)[0] in wanted
+            ]
+            lines = [f"Pads of {', '.join(sorted(wanted))} ({len(body)}):", *body]
+        if max_pads and len(lines) > max_pads + 1:
+            lines = [*lines[: max_pads + 1], f"... and {len(lines) - max_pads - 1} more"]
+        return "\n".join(lines)
+
+    def _all_pads_text(unlimited: bool = False) -> str:
         """List board pads.
 
         Reads from the configured project's ``.kicad_pcb`` so the answer
@@ -2689,7 +2713,8 @@ def register(mcp: FastMCP) -> None:
         pcb_path, use_live = _resolve_read_source()
 
         if use_live:
-            pad_entries, total = _limit(_iter_board_pads_with_refs())
+            found = list(_iter_board_pads_with_refs())
+            pad_entries, total = (found, len(found)) if unlimited else _limit(found)
             if not pad_entries:
                 return "No pads are present on the active board."
             lines = [f"Pads ({total} total):"]
