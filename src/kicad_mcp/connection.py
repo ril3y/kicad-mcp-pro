@@ -65,8 +65,28 @@ def get_kicad() -> KiCad:
         raise _connection_error(exc) from exc
 
 
+def _headless_board_server_gone() -> bool:
+    """True in headless mode when the board's background API server is not running."""
+    from .ipc import headless
+
+    return headless.enabled() and "board" not in headless.status()
+
+
 def get_board() -> Board:
     """Return the active board from KiCad."""
+    try:
+        return cast(Board, _get_session().board())
+    except (KiCadConnectionError, KiCadBoardNotOpenError, KiCadMcpError) as first:
+        # The headless server can be stopped from outside (it shares KiCad's process
+        # name). The cached client then points at a dead socket: drop it and connect
+        # again, which starts a fresh server.
+        if not _headless_board_server_gone():
+            if isinstance(first, KiCadConnectionError):
+                raise
+            if not isinstance(first, KiCadBoardNotOpenError):
+                raise _connection_error(first) from first
+        else:
+            reset_connection()
     try:
         return cast(Board, _get_session().board())
     except KiCadConnectionError:
