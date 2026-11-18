@@ -218,3 +218,12 @@ def test_sheet_block_grows_to_hold_its_pins(monkeypatch: pytest.MonkeyPatch) -> 
     assert updated.filename_field.text.position.y_nm == 61_000_000 + (27_940_000 - 20_320_000)
     assert [round(y, 2) for _name, _x, y, _added in results][:2] == [43.18, 45.72]
     assert results[-1][2] == pytest.approx(40.64 + 25.4)
+
+    low = runtime_gate.route_schematic_add_sheet_pins(
+        "Controller",
+        [{"name": "LOW", "side": "right", "offset_mm": 43.18}],
+        kicad_factory=Client,  # type: ignore[arg-type]
+    )
+    sent["update"].items[0].Unpack(updated)
+    assert low[0][2] == pytest.approx(40.64 + 43.18)
+    assert updated.size.y_nm == 43_180_000 + 2_540_000  # grown to hold the given position

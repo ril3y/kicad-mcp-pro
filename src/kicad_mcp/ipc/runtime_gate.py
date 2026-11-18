@@ -635,6 +635,11 @@ def route_schematic_add_sheet_pins(
             if side_name in per_side:
                 per_side[side_name] += 1
     needed_nm = (max(per_side.values()) + 1) * 2 * _SHEET_PIN_GRID_NM
+    # A pin given its own position must also end up inside the block.
+    for spec in pins:
+        if str(spec["name"]) not in existing and "offset_mm" in spec:
+            below = int(round(float(spec["offset_mm"]) * 1e6)) + 2 * _SHEET_PIN_GRID_NM
+            needed_nm = max(needed_nm, below)
     grew = needed_nm > block.size.y_nm
     if grew:
         delta = needed_nm - block.size.y_nm
