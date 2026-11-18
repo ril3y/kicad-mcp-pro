@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import uuid
 from collections.abc import Callable, Iterable
@@ -3791,10 +3792,35 @@ def register(mcp: FastMCP) -> None:
                 return str(pad.net.name)
         return ""
 
+    def _kept_copper(keep: set[str]) -> list[tuple[str, float, float, float, float, float]]:
+        """Tracks and vias of the kept nets, as the planner wants them."""
+        board = get_board()
+        kept: list[tuple[str, float, float, float, float, float]] = []
+        for track in cast(Iterable[Any], board.get_tracks()):
+            if str(track.net.name) in keep:
+                kept.append(
+                    (
+                        BoardLayer.Name(track.layer).removeprefix("BL_"),
+                        nm_to_mm(track.start.x),
+                        nm_to_mm(track.start.y),
+                        nm_to_mm(track.end.x),
+                        nm_to_mm(track.end.y),
+                        nm_to_mm(track.width) / 2,
+                    )
+                )
+        for via in cast(Iterable[Any], board.get_vias()):
+            if str(via.net.name) in keep:
+                x, y = nm_to_mm(via.position.x), nm_to_mm(via.position.y)
+                kept.append(("*", x, y, x, y, 0.3))
+        return kept
+
     def _rip_up(
         places: list[tuple[str, float, float]], keep: set[str], reach_mm: float
-    ) -> list[str]:
-        """Delete other nets' tracks and vias lying on the given places; return their nets."""
+    ) -> tuple[list[str], list[Any]]:
+        """Delete other nets' tracks and vias on the given places.
+
+        Returns their nets and the deleted items, so they can be put back.
+        """
         board = get_board()
         doomed: list[Any] = []
         nets: set[str] = set()
@@ -3819,7 +3845,7 @@ def register(mcp: FastMCP) -> None:
                 place[0] == layer and near(place[1], place[2], ax, ay, bx, by) < limit
                 for place in places
             ):
-                doomed.append(track.id)
+                doomed.append(track)
                 nets.add(name)
         for via in cast(Iterable[Any], board.get_vias()):
             name = str(via.net.name)
@@ -3830,12 +3856,12 @@ def register(mcp: FastMCP) -> None:
                 ((place[1] - vx) ** 2 + (place[2] - vy) ** 2) ** 0.5 < reach_mm + 0.3
                 for place in places
             ):
-                doomed.append(via.id)
+                doomed.append(via)
                 nets.add(name)
         if doomed:
             with board_transaction() as live:
-                live.remove_items_by_id(doomed)
-        return sorted(nets)
+                live.remove_items_by_id([item.id for item in doomed])
+        return sorted(nets), doomed
 
     def _route_connection(
         net: str,
@@ -3854,7 +3880,9 @@ def register(mcp: FastMCP) -> None:
         from ..ipc.route import plan_connection, route_track
 
         outcome: dict[str, Any] = {"ok": False, "ripped": [], "reason": ""}
+        removed: list[Any] = []
         try:
+            kept = _kept_copper(keep_nets) if rip_up else None
             plan = plan_connection(
                 net,
                 first,
@@ -3863,6 +3891,7 @@ def register(mcp: FastMCP) -> None:
                 via_cost_mm=via_cost_mm,
                 avoid=avoid,
                 rip_up=rip_up,
+                kept_copper=kept,
                 width_mm=width_mm,
                 cell_mm=cell_mm,
             )
@@ -3877,6 +3906,7 @@ def register(mcp: FastMCP) -> None:
                     via_cost_mm=via_cost_mm,
                     avoid=avoid,
                     rip_up=rip_up,
+                    kept_copper=kept,
                     width_mm=width_mm,
                     cell_mm=cell_mm,
                 )
@@ -3884,7 +3914,7 @@ def register(mcp: FastMCP) -> None:
                 outcome["reason"] = plan["reason"]
                 return outcome
             if plan["through"]:
-                outcome["ripped"] = _rip_up(
+                outcome["ripped"], removed = _rip_up(
                     plan["through"], keep_nets | {net}, plan["width"] / 2 + 0.2
                 )
             last_error = ""
@@ -3910,12 +3940,18 @@ def register(mcp: FastMCP) -> None:
                 )
                 if not outcome["ok"]:
                     outcome["reason"] = "the router stopped short of the end"
+                removed = []
                 return outcome
             outcome["reason"] = (
                 f"planned ({plan['length_mm']} mm, {plan['vias']} via) but not drawn: {last_error}"
             )
         except Exception as exc:  # noqa: BLE001 - report, do not stop a batch
             outcome["reason"] = str(exc)
+        if removed:
+            # Nothing was drawn: put the ripped pieces back.
+            with board_transaction() as live:
+                live.create_items(removed)
+            outcome["ripped"] = []
         return outcome
 
     @mcp.tool()
@@ -4022,6 +4058,13 @@ def register(mcp: FastMCP) -> None:
         save = cast(Callable[[], None], get_board().save)
         lines: list[str] = []
         still: list[str] = []
+        counts: list[int] = []
+        save()
+        pcb_file = get_config().pcb_file
+        snapshot = None
+        if pcb_file is not None and Path(pcb_file).exists():
+            snapshot = get_config().ensure_output_dir("routing") / "before-route-open.kicad_pcb"
+            shutil.copy2(pcb_file, snapshot)
         for round_number in range(1, max(1, passes) + 1):
             save()
             _, report, error = _run_drc_report("drc_report.json")
@@ -4046,8 +4089,14 @@ def register(mcp: FastMCP) -> None:
                 if only_nets and net_name not in only_nets:
                     continue
                 jobs.append((net_name, ends[0], ends[1], " <-> ".join(_item_texts(entry))))
+            counts.append(len(opens))
             if not jobs:
                 still = []
+                break
+            if len(counts) > 1 and counts[-1] >= counts[-2]:
+                lines.append(
+                    f"Stopped: open connections went from {counts[-2]} to {counts[-1]}, no gain."
+                )
                 break
             routed = 0
             still = []
@@ -4065,6 +4114,8 @@ def register(mcp: FastMCP) -> None:
                     )  # fmt: skip
                 if result["ok"]:
                     routed += 1
+                    # A net routed in this run is not ripped up again by a later one.
+                    keep.add(net_name)
                     note = f"{result['vias']} via(s), about {result['length_mm']} mm"
                     if result["ripped"]:
                         note += f", ripped up pieces of {', '.join(result['ripped'])}"
@@ -4083,6 +4134,12 @@ def register(mcp: FastMCP) -> None:
         lines.append(
             f"Open connections now: {remaining if remaining >= 0 else 'unknown'}. Board saved."
         )
+        if counts and remaining > counts[0] and snapshot is not None:
+            lines.append(
+                f"That is more than the {counts[0]} at the start. The board as it was is at {snapshot}."
+            )
+        elif counts:
+            lines.append(f"At the start: {counts[0]}.")
         if still:
             lines.append("Not routed in the last pass:")
             lines.extend(still[:25])

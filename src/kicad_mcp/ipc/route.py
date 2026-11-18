@@ -290,6 +290,7 @@ def plan_connection(
     avoid: list[dict[str, float]] | None = None,
     rip_up: bool = False,
     rip_up_cost_mm: float = 2.0,
+    kept_copper: list[tuple[str, float, float, float, float, float]] | None = None,
     width_mm: float = 0.0,
     cell_mm: float = 0.1,
     client: MasterKiCadClient | None = None,
@@ -302,6 +303,9 @@ def plan_connection(
     through the centre costs as much as ``cost_mm`` of extra track per cell.
     With ``rip_up`` the path may cross other nets' tracks; the places are returned
     in ``through`` as ``(layer, x_mm, y_mm)``.
+    ``kept_copper`` lists tracks that must not be crossed even then, each
+    ``(layer, x1, y1, x2, y2, half_width)`` in mm; a via is a zero-length piece
+    with layer "*".
 
     Returns ``ok``; on success ``waypoints`` (for ``route_track``), ``through``,
     ``width`` (mm), ``vias`` (count) and ``length_mm``; otherwise ``reason``.
@@ -330,12 +334,41 @@ def plan_connection(
         )
     cell = full["cell"]
     origin_x, origin_y = full["origin"]
+    hard_layers: list[bytes] | None = None
+    if hard:
+        marked = [bytearray(hard["blocked"][name]) for name in layers]
+        reach_extra = full["track_width"] / 2 + 0.2
+        for layer_name, x1, y1, x2, y2, half_width in kept_copper or []:
+            reach = half_width + reach_extra
+            first_column = max(0, int((min(x1, x2) - reach - origin_x) / cell))
+            last_column = min(full["columns"] - 1, int((max(x1, x2) + reach - origin_x) / cell) + 1)
+            first_row = max(0, int((min(y1, y2) - reach - origin_y) / cell))
+            last_row = min(full["rows"] - 1, int((max(y1, y2) + reach - origin_y) / cell) + 1)
+            dx, dy = x2 - x1, y2 - y1
+            span = dx * dx + dy * dy
+            targets = [
+                marked[index] for index, name in enumerate(layers) if layer_name in ("*", name)
+            ]
+            for row in range(first_row, last_row + 1):
+                py = origin_y + row * cell
+                for column in range(first_column, last_column + 1):
+                    px = origin_x + column * cell
+                    along = (
+                        0.0
+                        if span == 0
+                        else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / span))
+                    )
+                    gap = ((px - x1 - along * dx) ** 2 + (py - y1 - along * dy) ** 2) ** 0.5
+                    if gap < reach:
+                        for target in targets:
+                            target[row * full["columns"] + column] = 1
+        hard_layers = [bytes(layer) for layer in marked]
     grid = route_planner.Grid(
         columns=full["columns"],
         rows=full["rows"],
         blocked=[full["blocked"][name] for name in layers],
         via_blocked=full["via_blocked"],
-        hard_blocked=[hard["blocked"][name] for name in layers] if hard else None,
+        hard_blocked=hard_layers,
         layer_cost=costs,
     )
 
