@@ -341,3 +341,25 @@ async def test_lib_number_footprint_pads_numbers_only_the_unnumbered(sample_proj
     assert "Numbered 1 pad(s)" in first
     assert footprint.read_text(encoding="utf-8").count('(pad "37"') == 2
     assert "no unnumbered pads" in again
+
+
+def test_parse_ses_gives_tracks_and_vias_in_board_millimetres() -> None:
+    from kicad_mcp.utils.freerouting import parse_ses
+
+    ses = """(session board.ses (base_design board.dsn)
+      (routes (resolution um 10)
+        (library_out (padstack "Via[0-3]_600:300_um"))
+        (network_out
+          (net "/LED_EN"
+            (wire (path F.Cu 2000 1040000 -850000 1060000 -850000 1060000 -870000))
+            (via "Via[0-3]_600:300_um" 1060000 -870000))
+          (net GND (wire (path B.Cu 5000 0 0 10000 0))))))"""
+    tracks, vias = parse_ses(ses)
+
+    assert tracks[0] == {
+        "net": "/LED_EN", "layer": "F.Cu", "width": 0.2,
+        "x1": 104.0, "y1": 85.0, "x2": 106.0, "y2": 85.0,
+    }  # fmt: skip
+    assert (tracks[1]["x2"], tracks[1]["y2"]) == (106.0, 87.0)
+    assert tracks[2]["net"] == "GND" and tracks[2]["width"] == 0.5
+    assert vias == [{"net": "/LED_EN", "x": 106.0, "y": 87.0, "diameter": 0.6, "drill": 0.3}]

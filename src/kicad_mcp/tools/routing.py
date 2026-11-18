@@ -394,11 +394,17 @@ def register(mcp: FastMCP) -> None:
         use_docker: bool = True,
         freerouting_jar_path: str | None = None,
         drc_report_path: str = "output/routing/freerouting.drc.json",
+        docker_image: str = "",
         ctx: Context[Any, Any, Any] | None = None,
     ) -> ToolResult:
-        """Run FreeRouting after placement; do not skip this post-placement routing step."""
+        """Run FreeRouting on the placed board; bring the result in with pcb_import_routes.
+
+        ``docker_image`` overrides the configured image, e.g.
+        "ghcr.io/freerouting/freerouting:1.9.0" (the 2.x images do not take the
+        command-line arguments used here).
+        """
         cfg = get_config()
-        runner = FreeRoutingRunner()
+        runner = FreeRoutingRunner(docker_image=docker_image or None)
         pcb_file = _get_pcb_file()
         dsn_target = cfg.resolve_within_project(Path(dsn_path))
         ses_target = cfg.resolve_within_project(Path(ses_path))

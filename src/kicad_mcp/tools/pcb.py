@@ -3662,6 +3662,68 @@ def register(mcp: FastMCP) -> None:
         return f"Deleted {', '.join(sorted(found))}.{tail} {hint}"
 
     @mcp.tool()
+    def pcb_import_routes(ses_path: str = "output/routing/board.ses") -> str:
+        """Bring an autorouter's result (Specctra .ses) onto the board as tracks and vias.
+
+        The headless replacement for the PCB editor's File > Import > Specctra
+        Session. Run route_autoroute_freerouting first; it writes the file. Nets the
+        board does not know are skipped and named. Nothing is saved until pcb_save().
+        """
+        hint = _PERSISTENCE_HINT
+        from ..utils.freerouting import parse_ses
+
+        try:
+            path = get_config().resolve_within_project(Path(ses_path))
+            tracks, vias = parse_ses(path.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, ValueError) as exc:
+            return f"Routes not imported: {exc}"
+        if not tracks and not vias:
+            return f"No routes found in {path.name}."
+        nets: dict[str, Any] = {}
+        unknown: set[str] = set()
+
+        def net_of(name: str) -> Any:  # noqa: ANN401 - kipy Net
+            if name not in nets and name not in unknown:
+                try:
+                    nets[name] = _find_net(name)
+                except ValueError:
+                    unknown.add(name)
+            return nets.get(name)
+
+        created: list[Any] = []
+        for entry in tracks:
+            net = net_of(entry["net"])
+            if net is None:
+                continue
+            track = Track()
+            track.start = Vector2.from_xy_mm(entry["x1"], entry["y1"])
+            track.end = Vector2.from_xy_mm(entry["x2"], entry["y2"])
+            track.layer = resolve_layer(str(entry["layer"]).replace(".", "_"))
+            track.width = mm_to_nm(entry["width"])
+            track.net = net
+            created.append(track)
+        track_count = len(created)
+        for entry in vias:
+            net = net_of(entry["net"])
+            if net is None:
+                continue
+            via = Via()
+            via.position = Vector2.from_xy_mm(entry["x"], entry["y"])
+            via.diameter = mm_to_nm(entry["diameter"])
+            via.drill_diameter = mm_to_nm(entry["drill"])
+            via.type = ViaType.VT_THROUGH
+            via.net = net
+            created.append(via)
+        if created:
+            with board_transaction() as board:
+                board.create_items(created)
+        skipped = f" Skipped unknown nets: {', '.join(sorted(unknown))}." if unknown else ""
+        return (
+            f"Imported {track_count} track piece(s) and {len(created) - track_count} via(s) "
+            f"from {path.name}.{skipped} {hint}"
+        )
+
+    @mcp.tool()
     def pcb_import_netlist(
         dry_run: bool = False,
         delete_extra_footprints: bool = False,

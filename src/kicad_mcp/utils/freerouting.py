@@ -9,6 +9,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -161,16 +162,21 @@ class FreeRoutingRunner:
         target = cfg.resolve_within_project(dsn_path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        if target.exists():
-            return target
-
         caps = get_cli_capabilities(cfg.kicad_cli)
+        if target.exists() and not caps.supports_specctra_export:
+            return target
         if caps.supports_specctra_export:
-            raise RuntimeError(
-                "Specctra DSN export appears to be available in this KiCad CLI build, "
-                "but the exact headless export syntax has not been wired yet. "
-                f"Export the DSN once from KiCad and place it at {target}."
+            done = subprocess.run(  # noqa: S603 - fixed argv
+                [str(cfg.kicad_cli), "pcb", "export", "specctra", "-o", str(target), str(pcb_path)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
             )
+            if done.returncode != 0 or not target.exists():
+                detail = (done.stderr or done.stdout).strip().splitlines()[-1:] or ["no output"]
+                raise RuntimeError(f"kicad-cli could not export the DSN: {detail[0]}")
+            return target
 
         candidates = [
             pcb_path.with_suffix(".dsn"),
@@ -385,3 +391,75 @@ class FreeRoutingRunner:
             )
 
         return staged
+
+
+def _ses_tokens(text: str) -> list[Any]:
+    """Parse Specctra text into nested lists of atoms."""
+    atoms = re.findall(r'\(|\)|"(?:[^"\\]|\\.)*"|[^\s()]+', text)
+    root: list[Any] = []
+    stack = [root]
+    for atom in atoms:
+        if atom == "(":
+            fresh: list[Any] = []
+            stack[-1].append(fresh)
+            stack.append(fresh)
+        elif atom == ")":
+            if len(stack) > 1:
+                stack.pop()
+        else:
+            stack[-1].append(atom[1:-1] if atom.startswith('"') else atom)
+    return root
+
+
+def _ses_find(node: list[Any], name: str) -> list[list[Any]]:
+    return [child for child in node if isinstance(child, list) and child and child[0] == name]
+
+
+def parse_ses(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read the routed wires and vias out of a Specctra session (.ses) file.
+
+    Returns ``(tracks, vias)`` in board millimetres. Tracks are one entry per
+    straight piece: ``net, layer, width, x1, y1, x2, y2``. Vias: ``net, x, y,
+    diameter, drill``. Specctra's Y axis points up, KiCad's down, so Y is negated.
+    """
+    tree = _ses_tokens(text)
+    session = (_ses_find(tree, "session") or [[]])[0]
+    routes = (_ses_find(session, "routes") or [[]])[0]
+    resolution = (_ses_find(routes, "resolution") or [["resolution", "um", "10"]])[0]
+    per_mm = {"um": 1000.0, "mm": 1.0, "mil": 39.37007874, "inch": 0.03937007874}.get(
+        str(resolution[1]), 1000.0
+    ) * float(resolution[2])
+    tracks: list[dict[str, Any]] = []
+    vias: list[dict[str, Any]] = []
+    for network in _ses_find(routes, "network_out"):
+        for net in _ses_find(network, "net"):
+            name = str(net[1])
+            for wire in _ses_find(net, "wire"):
+                for path in _ses_find(wire, "path"):
+                    layer, width = str(path[1]), float(path[2]) / per_mm
+                    numbers = [float(value) for value in path[3:]]
+                    points = list(zip(numbers[0::2], numbers[1::2], strict=False))
+                    for (x1, y1), (x2, y2) in zip(points, points[1:], strict=False):
+                        tracks.append(
+                            {
+                                "net": name,
+                                "layer": layer,
+                                "width": round(width, 4),
+                                "x1": round(x1 / per_mm, 4),
+                                "y1": round(-y1 / per_mm, 4),
+                                "x2": round(x2 / per_mm, 4),
+                                "y2": round(-y2 / per_mm, 4),
+                            }
+                        )
+            for via in _ses_find(net, "via"):
+                size = re.search(r"_(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)_um", str(via[1]))
+                vias.append(
+                    {
+                        "net": name,
+                        "x": round(float(via[2]) / per_mm, 4),
+                        "y": round(-float(via[3]) / per_mm, 4),
+                        "diameter": float(size.group(1)) / 1000 if size else 0.6,
+                        "drill": float(size.group(2)) / 1000 if size else 0.3,
+                    }
+                )
+    return tracks, vias
