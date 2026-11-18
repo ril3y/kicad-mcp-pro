@@ -76,6 +76,9 @@ def messages() -> tuple[Any, Any]:
     add(request, "end", 5, ".kiapi.common.types.Vector2")
     add(request, "mode", 6, f".{_PACKAGE}.RouteTrackMode", enum=True)
     optional(request, "width", 7, ".kiapi.common.types.Distance")
+    request.field.add(
+        name="allow_partial", number=8, type=field.TYPE_BOOL, label=field.LABEL_OPTIONAL
+    )
 
     response = file.message_type.add(name="RouteTrackResponse")
     add(response, "header", 1, ".kiapi.common.types.ItemHeader")
@@ -107,13 +110,15 @@ def route_track(
     waypoints: list[dict[str, Any]] | None = None,
     shove: bool = False,
     width_mm: float = 0.0,
+    allow_partial: bool = False,
     client: MasterKiCadClient | None = None,
 ) -> dict[str, Any]:
     """Route one track from ``start`` to ``end`` (mm); return what KiCad's router laid.
 
     ``layer`` and a waypoint's ``layer`` are names like "F_Cu" or "In2.Cu". A
     waypoint is ``{"x", "y"}`` with an optional ``"layer"``: a different layer
-    there places a via and continues on it. Returns ``tracks`` and ``vias`` (each
+    there places a via and continues on it. Unless ``allow_partial`` is set, a
+    route that cannot reach ``end`` adds nothing and raises. Returns ``tracks`` and ``vias`` (each
     a list of dicts in mm) and ``reached_end``.
     """
     from kicad_mcp._master_proto.mp.board import board_types_pb2 as board_types
@@ -131,6 +136,7 @@ def route_track(
     request.end.x_nm, request.end.y_nm = _nm(end[0]), _nm(end[1])
     request.layer = layer_value(layer)
     request.mode = 2 if shove else 1
+    request.allow_partial = allow_partial
     if width_mm > 0:
         request.width.value_nm = _nm(width_mm)
     for entry in waypoints or []:

@@ -3694,6 +3694,7 @@ def register(mcp: FastMCP) -> None:
         waypoints: list[dict[str, Any]] | None = None,
         shove: bool = False,
         width_mm: float = 0.0,
+        allow_partial: bool = False,
     ) -> str:
         """Route one track with KiCad's own interactive (push-and-shove) router.
 
@@ -3713,6 +3714,9 @@ def register(mcp: FastMCP) -> None:
             shove: Push other nets' tracks and vias aside where the rules allow.
                 Off, the router only goes around them.
             width_mm: Track width; 0 uses the width the board's rules give the net.
+            allow_partial: Keep the part the router could lay when it cannot reach
+                the end. Off, a blocked route adds nothing and the answer says how
+                far the router got, which is a good place for a waypoint or a via.
         """
         hint = _PERSISTENCE_HINT
         from ..ipc.route import route_track
@@ -3734,7 +3738,13 @@ def register(mcp: FastMCP) -> None:
         try:
             first, last = point(start), point(end)
             done = route_track(
-                first, last, layer, waypoints=waypoints, shove=shove, width_mm=width_mm
+                first,
+                last,
+                layer,
+                waypoints=waypoints,
+                shove=shove,
+                width_mm=width_mm,
+                allow_partial=allow_partial,
             )
         except Exception as exc:  # noqa: BLE001 - surface the router's own message
             return f"Not routed: {exc}"
