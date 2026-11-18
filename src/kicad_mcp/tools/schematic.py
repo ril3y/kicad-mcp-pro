@@ -4791,6 +4791,37 @@ def register(mcp: FastMCP) -> None:
         return _attach_snap_warning(combined, snap_to_grid)
 
     @mcp.tool()
+    def sch_set_active_sheet(sheet: str = "") -> str:
+        """Choose which sheet later schematic edits go to.
+
+        Symbols, wires, labels and other items added over IPC land on this sheet until it is
+        changed. The choice lasts for the server session.
+
+        Args:
+            sheet: A child sheet name ("Power 3V3") or path ("/Power 3V3/"). Leave empty or pass
+                "/" for the root sheet.
+        """
+        from kicad_mcp.ipc.runtime_gate import (
+            _open_schematic_for_ipc,
+            get_active_sheet,
+            set_active_sheet,
+        )
+
+        previous = get_active_sheet()
+        set_active_sheet(sheet)
+        if not get_active_sheet():
+            return "Active sheet: / (root). Schematic edits go to the root sheet."
+        try:
+            _open_schematic_for_ipc()
+        except Exception as exc:
+            set_active_sheet(previous)
+            return f"Active sheet not changed: {exc}"
+        return (
+            f"Active sheet: {get_active_sheet()}. Schematic edits over IPC go to this sheet "
+            "until sch_set_active_sheet() is called again."
+        )
+
+    @mcp.tool()
     def sch_list_sheets() -> str:
         """List child sheets from the active top-level schematic."""
         sch_file = _get_schematic_file()

@@ -401,6 +401,57 @@ def check_ipc_gate(
 # ---------------------------------------------------------------------------
 
 
+_active_sheet = ""
+
+
+def get_active_sheet() -> str:
+    """Return the sheet schematic edits are directed to; "" means the root sheet."""
+    return _active_sheet
+
+
+def set_active_sheet(sheet: str) -> None:
+    """Direct later schematic edits to a sheet, by name or path; "" or "/" is the root."""
+    global _active_sheet
+    _active_sheet = "" if sheet.strip() in ("", "/") else sheet.strip()
+
+
+def list_sheet_paths(client: Any, document: Any) -> list[tuple[str, str, Any]]:  # noqa: ANN401
+    """Return (human path, name, SheetPath) for every sheet in the open schematic."""
+    from kicad_mcp._master_proto.mp.schematic.schematic_commands_pb2 import (
+        GetSchematicHierarchy,
+        SchematicHierarchyResponse,
+    )
+
+    request = GetSchematicHierarchy()
+    request.document.CopyFrom(document)
+    response = client.send(request, SchematicHierarchyResponse)
+    found: list[tuple[str, str, Any]] = []
+    pending = list(response.top_level_sheets)
+    while pending:
+        sheet = pending.pop(0)
+        found.append((sheet.path.path_human_readable, sheet.name, sheet.path))
+        pending.extend(sheet.children)
+    return found
+
+
+def _target_document(client: Any, docs: list[Any]) -> Any:  # noqa: ANN401
+    """Return the open schematic document, pointed at the active sheet when one is set."""
+    doc = docs[0]
+    if not _active_sheet:
+        return doc
+    wanted = _active_sheet.strip("/").casefold()
+    for human_path, name, sheet_path in list_sheet_paths(client, doc):
+        if wanted in (human_path.strip("/").casefold(), name.casefold()):
+            target = type(doc)()
+            target.CopyFrom(doc)
+            target.sheet_path.CopyFrom(sheet_path)
+            return target
+    raise SchematicIPCRequiredError(
+        f"Active sheet {_active_sheet!r} was not found in the open schematic. "
+        "Call sch_set_active_sheet() with a sheet from sch_list_sheets()."
+    )
+
+
 def _open_schematic_for_ipc(
     kicad_factory: _KiCadFactory | None = None,
 ) -> Schematic:
@@ -437,7 +488,7 @@ def _open_schematic_for_ipc(
         raise RuntimeError(
             "No schematic document is open in eeschema. Cannot dispatch schematic IPC mutation."
         )
-    return Schematic(docs[0], client=client)
+    return Schematic(_target_document(client, docs), client=client)
 
 
 def route_schematic_create(
@@ -636,7 +687,7 @@ def route_schematic_place_symbol(
         raise SchematicIPCRequiredError(
             "No schematic document is open in eeschema. Cannot place a library symbol."
         )
-    doc = docs[0]
+    doc = _target_document(client, docs)
 
     place = PlaceSymbolFromLibrary()
     place.header.document.CopyFrom(doc)
@@ -1051,7 +1102,7 @@ def route_schematic_save(
         raise SchematicIPCRequiredError(
             "No schematic document is open in eeschema. Cannot dispatch SaveDocument."
         )
-    doc = docs[0]
+    doc = _target_document(client, docs)
 
     save = SaveDocument()
     save.document.CopyFrom(doc)
@@ -1110,7 +1161,7 @@ def route_schematic_delete_by_reference(
         raise SchematicIPCRequiredError(
             "No schematic document is open in eeschema. Cannot dispatch DeleteItems."
         )
-    doc = docs[0]
+    doc = _target_document(client, docs)
 
     get = GetItems()
     get.header.document.CopyFrom(doc)
@@ -1206,7 +1257,7 @@ def route_schematic_clear_all(
         raise SchematicIPCRequiredError(
             "No schematic document is open in eeschema. Cannot dispatch DeleteItems."
         )
-    doc = docs[0]
+    doc = _target_document(client, docs)
 
     get = GetItems()
     get.header.document.CopyFrom(doc)

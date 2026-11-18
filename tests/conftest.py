@@ -77,6 +77,9 @@ def reset_globals(monkeypatch: pytest.MonkeyPatch) -> None:
 
     reset_config()
     reset_connection()
+    from kicad_mcp.ipc.runtime_gate import set_active_sheet
+
+    set_active_sheet("")
     stop_studio_project_watcher()
     clear_ttl_cache()
     monkeypatch.delenv("KICAD_MCP_PROJECT_DIR", raising=False)

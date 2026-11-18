@@ -149,6 +149,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "sch_get_net_names",
             "sch_create_sheet",
             "sch_list_sheets",
+            "sch_set_active_sheet",
             "sch_get_sheet_info",
             "sch_add_symbol",
             "sch_add_wire",
