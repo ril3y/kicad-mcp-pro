@@ -400,9 +400,21 @@ def plan_connection(
         rip_up_cost=rip_up_cost_mm / cell if rip_up else 0.0,
     )
     if plan is None:
+        start_reach, start_layers = route_planner.reach(grid, first)
+        end_reach, end_layers = route_planner.reach(grid, last)
+        area = cell * cell
+
+        def describe(count: int, touched: set[int]) -> str:
+            names = ", ".join(layers[index] for index in sorted(touched))
+            return f"{count * area:.2f} mm2 on {names}"
+
+        reason = (
+            f"no free path: the start can reach {describe(start_reach, start_layers)}, "
+            f"the end {describe(end_reach, end_layers)}, and the two areas do not meet"
+        )
         return {
             "ok": False,
-            "reason": "no path on the allowed layers",
+            "reason": reason,
             "width": full["track_width"],
         }
 
