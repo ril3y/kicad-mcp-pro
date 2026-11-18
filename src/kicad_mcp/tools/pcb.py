@@ -3482,29 +3482,72 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pcb_set_board_outline(
-        width_mm: float,
-        height_mm: float,
+        width_mm: float = 0.0,
+        height_mm: float = 0.0,
         origin_x_mm: float = 0.0,
         origin_y_mm: float = 0.0,
+        points: list[list[float]] | None = None,
+        replace: bool = True,
     ) -> str:
-        """Draw a rectangular board outline on Edge.Cuts."""
-        payload = SetBoardOutlineInput(
-            width_mm=width_mm,
-            height_mm=height_mm,
-            origin_x_mm=origin_x_mm,
-            origin_y_mm=origin_y_mm,
-        )
-        rectangle = BoardRectangle()
-        rectangle.layer = BoardLayer.BL_Edge_Cuts
-        rectangle.top_left = Vector2.from_xy_mm(payload.origin_x_mm, payload.origin_y_mm)
-        rectangle.bottom_right = Vector2.from_xy_mm(
-            payload.origin_x_mm + payload.width_mm,
-            payload.origin_y_mm + payload.height_mm,
-        )
-        rectangle.attributes.stroke.width = mm_to_nm(0.05)
+        """Draw the board outline on Edge.Cuts: a rectangle, or any closed polygon.
+
+        Args:
+            width_mm: Rectangle width; used when ``points`` is not given.
+            height_mm: Rectangle height.
+            origin_x_mm: Rectangle top-left corner X.
+            origin_y_mm: Rectangle top-left corner Y.
+            points: Corners of a polygon outline as ``[x_mm, y_mm]`` each, in order
+                round the board (for a notched or stepped board). The last corner
+                joins the first.
+            replace: Remove the shapes already on Edge.Cuts first, so the board has
+                one outline. Pass false to add a cut-out inside an existing outline.
+
+        Nothing is saved until pcb_save().
+        """
+        items: list[Any] = []
+        if points:
+            if len(points) < 3:
+                return "An outline polygon needs at least three corners."
+            for index, (x1, y1) in enumerate(points):
+                x2, y2 = points[(index + 1) % len(points)]
+                segment = BoardSegment()
+                segment.layer = BoardLayer.BL_Edge_Cuts
+                segment.start = Vector2.from_xy_mm(float(x1), float(y1))
+                segment.end = Vector2.from_xy_mm(float(x2), float(y2))
+                segment.attributes.stroke.width = mm_to_nm(0.05)
+                items.append(segment)
+            what = f"{len(points)}-corner outline"
+        else:
+            payload = SetBoardOutlineInput(
+                width_mm=width_mm,
+                height_mm=height_mm,
+                origin_x_mm=origin_x_mm,
+                origin_y_mm=origin_y_mm,
+            )
+            rectangle = BoardRectangle()
+            rectangle.layer = BoardLayer.BL_Edge_Cuts
+            rectangle.top_left = Vector2.from_xy_mm(payload.origin_x_mm, payload.origin_y_mm)
+            rectangle.bottom_right = Vector2.from_xy_mm(
+                payload.origin_x_mm + payload.width_mm,
+                payload.origin_y_mm + payload.height_mm,
+            )
+            rectangle.attributes.stroke.width = mm_to_nm(0.05)
+            items.append(rectangle)
+            what = "rectangular outline"
+        removed = 0
         with board_transaction() as board:
-            board.create_items([rectangle])
-        return f"Board outline added successfully. {_PERSISTENCE_HINT}"
+            if replace:
+                old = [
+                    shape.id
+                    for shape in cast(Iterable[Any], board.get_shapes())
+                    if getattr(shape, "layer", None) == BoardLayer.BL_Edge_Cuts
+                ]
+                if old:
+                    board.remove_items_by_id(old)
+                    removed = len(old)
+            board.create_items(items)
+        gone = f" {removed} earlier Edge.Cuts shape(s) removed." if removed else ""
+        return f"Board outline added: {what}.{gone} {_PERSISTENCE_HINT}"
 
     @mcp.tool()
     def pcb_add_text(
