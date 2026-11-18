@@ -129,6 +129,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_tidy_text",
             "pcb_set_layer_stackup",
             "pcb_set_fab_rules",
+            "pcb_set_net_classes",
             "pcb_refill_zones",
             "pcb_highlight_net",
             "pcb_set_net_class",

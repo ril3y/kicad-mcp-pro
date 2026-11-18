@@ -200,3 +200,75 @@ def set_rules(preset: str, client: MasterKiCadClient | None = None) -> list[str]
 
     after = client.send(get_rules, commands.BoardDesignRulesResponse).rules.constraints
     return [f"{key}: {getattr(after, key).value_nm / 1e6:g} mm" for key in spec]
+
+
+def set_net_classes(
+    classes: list[dict[str, Any]],
+    client: MasterKiCadClient | None = None,
+) -> list[str]:
+    """Create or change net classes and their net patterns; return what was set.
+
+    Each entry: ``name`` and any of ``clearance_mm``, ``track_width_mm``,
+    ``via_diameter_mm``, ``via_drill_mm``, ``patterns`` (net name patterns, with
+    ``*`` wildcards, assigned to the class). A new class starts as a copy of
+    ``Default``.
+    """
+    from kicad_mcp._master_proto.mp.common.commands import project_commands_pb2 as commands
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import MapMergeMode
+
+    client = client or MasterKiCadClient()
+    project = _board_document(client).project
+
+    request = commands.GetNetClasses()
+    request.project.CopyFrom(project)
+    existing = {
+        net_class.name: net_class
+        for net_class in client.send(request, commands.NetClassesResponse).net_classes
+    }
+    template = existing.get("Default")
+    update = commands.SetNetClasses()
+    update.project.CopyFrom(project)
+    update.merge_mode = MapMergeMode.MMM_MERGE
+    assign = commands.SetNetClassAssignments()
+    assign.project.CopyFrom(project)
+    assign.merge_mode = MapMergeMode.MMM_MERGE
+    done: list[str] = []
+    for spec in classes:
+        name = str(spec["name"])
+        net_class = update.net_classes.add()
+        if name in existing:
+            net_class.CopyFrom(existing[name])
+        elif template is not None:
+            net_class.CopyFrom(template)
+            net_class.priority = len(existing) + len(update.net_classes)
+        net_class.name = name
+        parts: list[str] = []
+        if "clearance_mm" in spec:
+            net_class.board.clearance.value_nm = _nm(float(spec["clearance_mm"]))
+            parts.append(f"clearance {spec['clearance_mm']} mm")
+        if "track_width_mm" in spec:
+            net_class.board.track_width.value_nm = _nm(float(spec["track_width_mm"]))
+            parts.append(f"track {spec['track_width_mm']} mm")
+        stack = net_class.board.via_stack
+        if "via_drill_mm" in spec:
+            stack.drill.diameter.x_nm = stack.drill.diameter.y_nm = _nm(float(spec["via_drill_mm"]))
+            parts.append(f"via drill {spec['via_drill_mm']} mm")
+        if "via_diameter_mm" in spec:
+            size = _nm(float(spec["via_diameter_mm"]))
+            if not stack.copper_layers:
+                stack.copper_layers.add()
+            for layer in stack.copper_layers:
+                layer.size.x_nm = layer.size.y_nm = size
+            parts.append(f"via {spec['via_diameter_mm']} mm")
+        patterns = [str(pattern) for pattern in spec.get("patterns", [])]
+        for pattern in patterns:
+            entry = assign.pattern_assignments.add()
+            entry.pattern = pattern
+            entry.netclass = name
+        if patterns:
+            parts.append(f"nets {', '.join(patterns)}")
+        done.append(f"{name}: " + ("; ".join(parts) or "unchanged"))
+    client.send(update, commands.NetClassesResponse)
+    if assign.pattern_assignments:
+        client.send(assign, commands.NetClassAssignmentsResponse)
+    return done

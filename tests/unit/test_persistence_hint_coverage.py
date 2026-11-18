@@ -53,6 +53,7 @@ _IPC_MUTATING_TOOLS = [
     "pcb_move_footprint",
     "pcb_apply_placement_spec",
     "pcb_move_block",
+    "pcb_set_net_classes",
     "pcb_delete_footprints",
     "pcb_delete_block_copper",
     "pcb_set_footprint_layer",

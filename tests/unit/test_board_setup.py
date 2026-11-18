@@ -59,3 +59,51 @@ async def test_unknown_presets_are_refused(sample_project: Path) -> None:
     assert "Unknown rule set" in await call_tool_text(
         server, "pcb_set_fab_rules", {"preset": "nope"}
     )
+
+
+def test_set_net_classes_changes_default_and_adds_a_class_with_patterns() -> None:
+    from kicad_mcp._master_proto.mp.common.commands import project_commands_pb2 as commands
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp.ipc import board_setup
+
+    sent: dict[str, object] = {}
+
+    class Client:
+        def send(self, command: object, response_cls: type) -> object:
+            name = type(command).__name__
+            if name == "GetOpenDocuments":
+                reply = GetOpenDocumentsResponse()
+                reply.documents.add().project.name = "demo"
+                return reply
+            if name == "GetNetClasses":
+                reply = commands.NetClassesResponse()
+                default = reply.net_classes.add()
+                default.name = "Default"
+                default.board.clearance.value_nm = 200_000
+                return reply
+            sent[name] = command
+            return response_cls()
+
+    done = board_setup.set_net_classes(
+        [
+            {"name": "Default", "clearance_mm": 0.15},
+            {
+                "name": "Power",
+                "track_width_mm": 0.6,
+                "via_diameter_mm": 0.8,
+                "patterns": ["/+24V*"],
+            },
+        ],
+        client=Client(),  # type: ignore[arg-type]
+    )
+
+    classes = {item.name: item for item in sent["SetNetClasses"].net_classes}  # type: ignore[attr-defined]
+    assert classes["Default"].board.clearance.value_nm == 150_000
+    assert classes["Power"].board.clearance.value_nm == 200_000  # copied from Default
+    assert classes["Power"].board.track_width.value_nm == 600_000
+    assert classes["Power"].board.via_stack.copper_layers[0].size.x_nm == 800_000
+    patterns = sent["SetNetClassAssignments"].pattern_assignments  # type: ignore[attr-defined]
+    assert [(item.pattern, item.netclass) for item in patterns] == [("/+24V*", "Power")]
+    assert done == ["Default: clearance 0.15 mm", "Power: track 0.6 mm; via 0.8 mm; nets /+24V*"]

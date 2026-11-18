@@ -3776,6 +3776,29 @@ def register(mcp: FastMCP) -> None:
         return "\n".join([f"Stackup set: {description}", *lines, _PERSISTENCE_HINT])
 
     @mcp.tool()
+    def pcb_set_net_classes(classes: list[dict[str, Any]]) -> str:
+        """Create or change net classes and say which nets belong to them.
+
+        Uses KiCad's own project commands, so the result is what Board Setup >
+        Net Classes would hold. Use it instead of route_set_net_class_rules, which
+        writes a custom-rules file. Saved with the project by pcb_save().
+
+        Args:
+            classes: One entry per class: ``name`` and any of ``clearance_mm``,
+                ``track_width_mm``, ``via_diameter_mm``, ``via_drill_mm`` and
+                ``patterns`` (net names with ``*`` wildcards, e.g. "/+24V*"). A new
+                class starts as a copy of "Default".
+        """
+        hint = _PERSISTENCE_HINT
+        from ..ipc.board_setup import set_net_classes
+
+        try:
+            done = set_net_classes(classes)
+        except Exception as exc:  # noqa: BLE001 - surface KiCad's own message
+            return f"Net classes not changed: {exc}"
+        return "\n".join(["Net classes set:", *[f"- {line}" for line in done], hint])
+
+    @mcp.tool()
     def pcb_set_fab_rules(preset: str = "jlcpcb-multilayer") -> str:
         """Write a fabricator's minimum constraints into the board setup.
 
