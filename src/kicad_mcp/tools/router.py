@@ -249,6 +249,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "lib_bind_part_to_symbol",
             "lib_set_pin_name",
             "lib_set_pin_types",
+            "lib_number_footprint_pads",
         ],
     },
     "export": {

@@ -540,6 +540,37 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
+    def lib_number_footprint_pads(library: str, footprint: str, number: str) -> str:
+        """Give the unnumbered pads of a project-library footprint a pad number.
+
+        Footprints from lib_import_lcsc_part often carry thermal holes inside the
+        exposed pad as pads with no number, which then have no net and fail the
+        clearance check against the pad they sit in. Numbering them like the
+        exposed pad (e.g. "37") puts them on its net. A footprint already on the
+        board keeps its old copy: delete it there and import the netlist again.
+
+        Args:
+            library: Project footprint library, e.g. "SmartDock".
+            footprint: Footprint name without ".kicad_mod".
+            number: Pad number to give every pad that has none.
+        """
+        cfg = get_config()
+        if cfg.project_dir is None:
+            return "No project is configured. Call kicad_set_project() first."
+        path = cfg.project_dir / "libs" / f"{library}.pretty" / f"{footprint}.kicad_mod"
+        if not path.is_file():
+            return f"Footprint not found: {path}"
+        if not re.fullmatch(r"[A-Za-z0-9_+-]+", number):
+            return "The pad number may hold letters, digits, _ + - only."
+        text = path.read_text(encoding="utf-8")
+        changed = text.count('(pad ""')
+        if not changed:
+            return f"'{footprint}' has no unnumbered pads."
+        path.write_text(text.replace('(pad ""', f'(pad "{number}"'), encoding="utf-8", newline="")
+        return f"Numbered {changed} pad(s) of '{library}:{footprint}' as {number}."
+
+    @mcp.tool()
+    @headless_compatible
     def lib_set_pin_types(
         symbol_name: str,
         pin_types: dict[str, str],

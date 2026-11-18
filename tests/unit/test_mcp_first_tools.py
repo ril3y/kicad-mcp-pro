@@ -311,3 +311,23 @@ def test_only_parentless_headless_servers_count_as_orphans() -> None:
 """
     expected = Path("/tmp/kmcp-old1")  # noqa: S108 - a path in test text, nothing is created
     assert headless.orphaned_servers(listing) == [(100, expected)]
+
+
+@pytest.mark.anyio
+async def test_lib_number_footprint_pads_numbers_only_the_unnumbered(sample_project: Path) -> None:
+    folder = sample_project / "libs" / "Parts.pretty"
+    folder.mkdir(parents=True)
+    footprint = folder / "QFN.kicad_mod"
+    footprint.write_text(
+        '(footprint "QFN" (pad "" thru_hole circle (at 0 0)) (pad "37" smd rect (at 0 0)))',
+        encoding="utf-8",
+    )
+    server = build_server("full")
+    args = {"library": "Parts", "footprint": "QFN", "number": "37"}
+
+    first = await call_tool_text(server, "lib_number_footprint_pads", args)
+    again = await call_tool_text(server, "lib_number_footprint_pads", args)
+
+    assert "Numbered 1 pad(s)" in first
+    assert footprint.read_text(encoding="utf-8").count('(pad "37"') == 2
+    assert "no unnumbered pads" in again
