@@ -80,13 +80,16 @@ def get_board() -> Board:
         # The headless server can be stopped from outside (it shares KiCad's process
         # name). The cached client then points at a dead socket: drop it and connect
         # again, which starts a fresh server.
-        if not _headless_board_server_gone():
-            if isinstance(first, KiCadConnectionError):
-                raise
-            if not isinstance(first, KiCadBoardNotOpenError):
-                raise _connection_error(first) from first
-        else:
+        from .ipc import headless
+
+        if headless.enabled():
+            # Also when a new server is already up (another client started it): the
+            # cached client still belongs to the one that went away.
             reset_connection()
+        elif isinstance(first, KiCadConnectionError):
+            raise
+        elif not isinstance(first, KiCadBoardNotOpenError):
+            raise _connection_error(first) from first
     try:
         return cast(Board, _get_session().board())
     except KiCadConnectionError:
