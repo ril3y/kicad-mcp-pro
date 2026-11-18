@@ -69,10 +69,20 @@ def reload_into(live: FastMCP) -> tuple[list[str], list[str]]:
     return sorted(after - before), sorted(before - after)
 
 
-def register(mcp: FastMCP) -> None:
-    """Register the development tools."""
+# The server the client is connected to. This module is kept across reloads, so the
+# reference survives; the tools registered on a rebuilt server must act on this one,
+# not on the rebuilt copy they were registered with.
+_live: FastMCP | None = None
 
-    @mcp.tool()
+
+def register(server: FastMCP) -> None:
+    """Register the development tools."""
+    global _live
+    if _live is None:
+        _live = server
+    mcp = _live
+
+    @server.tool()
     def dev_reload_tools() -> str:
         """Load changed server code into the running server, without a restart.
 
@@ -95,7 +105,7 @@ def register(mcp: FastMCP) -> None:
         lines.append("The active sheet was reset to the root.")
         return "\n".join(lines)
 
-    @mcp.tool()
+    @server.tool()
     async def dev_call_tool(name: str, arguments: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
         """Call any tool of this server by name, with its arguments as an object.
 

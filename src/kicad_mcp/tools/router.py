@@ -173,6 +173,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "sch_clear_all",
             "sch_save",
             "sch_delete_symbol",
+            "sch_delete_items",
             "sch_move_symbol",
             "sch_delete_wire",
             "sch_analyze_net_compilation",
@@ -245,6 +246,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "lib_recommend_part",
             "lib_bind_part_to_symbol",
             "lib_set_pin_name",
+            "lib_set_pin_types",
         ],
     },
     "export": {

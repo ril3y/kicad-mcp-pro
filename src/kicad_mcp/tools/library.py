@@ -540,6 +540,73 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
+    def lib_set_pin_types(
+        symbol_name: str,
+        pin_types: dict[str, str],
+        library: str = "",
+        library_path: str = "",
+    ) -> str:
+        """Set the electrical type of many pins of a library symbol in one call.
+
+        For symbols brought in with lib_import_lcsc_part, whose pins are all
+        "unspecified": ERC then warns on every connection and cannot tell a driven
+        net from an undriven one. Place the symbol after this, or delete and place
+        it again, so the schematic holds the corrected copy.
+
+        Args:
+            symbol_name: Symbol in the library, e.g. "LT3964RUHE-1".
+            pin_types: Pin number to type, e.g. {"5": "power_out", "7": "input"}.
+                Types: input, output, bidirectional, tri_state, passive, free,
+                unspecified, power_in, power_out, open_collector, open_emitter,
+                no_connect.
+            library: Library name from the project's sym-lib-table.
+            library_path: Or the path of a .kicad_sym file.
+        """
+        try:
+            lib_file = _resolve_symbol_library_path(library, library_path)
+            tree = load_sym_lib(lib_file)
+        except (FileNotFoundError, ValueError) as exc:
+            return f"Could not read the library: {exc}"
+        symbol_node = find_symbol(tree, symbol_name)
+        if symbol_node is None:
+            return f"Symbol '{symbol_name}' was not found in {lib_file.name}."
+        allowed = {
+            "input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified",
+            "power_in", "power_out", "open_collector", "open_emitter", "no_connect",
+        }  # fmt: skip
+        unknown = sorted(set(pin_types.values()) - allowed)
+        if unknown:
+            return f"Unknown pin type(s): {', '.join(unknown)}. Nothing changed."
+        missing = [number for number in pin_types if find_pin(symbol_node, number) is None]
+        if missing:
+            return f"No such pin(s) on '{symbol_name}': {', '.join(missing)}. Nothing changed."
+        changed = 0
+        try:
+            for number, pin_type in pin_types.items():
+                changed += bool(set_pin_type(find_pin(symbol_node, number), pin_type))
+        except ValueError as exc:
+            return f"{exc} Nothing changed."
+        if not changed:
+            return f"No change: all {len(pin_types)} pin(s) already have these types."
+        new_text = dump_sym_lib(tree)
+        cfg = get_config()
+        ok, msg = validate_via_kicad_cli(new_text, cfg.kicad_cli)
+        if not ok:
+            return f"Refusing to write: kicad-cli validation failed.\n  {msg}"
+        try:
+            hardening.raise_if_locked(lib_file, None)
+            backup_path = hardening.create_backup(lib_file, "lib_set_pin_types")
+        except hardening.HardeningError as exc:
+            return json.dumps(exc.to_payload(), ensure_ascii=False)
+        try:
+            lib_file.write_text(new_text, encoding="utf-8", newline="")
+        except OSError as exc:
+            hardening.restore_backup(backup_path, lib_file)
+            return f"Could not write the library; restored it: {exc}"
+        return f"Set the type of {changed} pin(s) on '{symbol_name}' in {lib_file.name}."
+
+    @mcp.tool()
+    @headless_compatible
     def lib_set_pin_name(
         symbol_name: str,
         pin_number: str,

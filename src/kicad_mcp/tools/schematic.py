@@ -2287,7 +2287,8 @@ def get_pin_positions(
             continue
         unit_prefix = f"{block_name}_{unit}_"
         for child_name, child_block in _extract_child_symbol_blocks(block):
-            if not child_name.startswith(unit_prefix):
+            # Unit 0 holds what every unit shares; easyeda2kicad puts all pins there.
+            if not child_name.startswith((unit_prefix, f"{block_name}_0_")):
                 continue
             for pin_number, (px, py) in _extract_pin_definitions(child_block).items():
                 # KiCad's pin (at x y angle) coordinate is the electrical connection point.
@@ -2328,7 +2329,8 @@ def get_pin_alias_positions(
             continue
         unit_prefix = f"{block_name}_{unit}_"
         for child_name, child_block in _extract_child_symbol_blocks(block):
-            if not child_name.startswith(unit_prefix):
+            # Unit 0 holds what every unit shares; easyeda2kicad puts all pins there.
+            if not child_name.startswith((unit_prefix, f"{block_name}_0_")):
                 continue
             for alias, point in _pin_alias_positions(
                 child_block,
@@ -3924,11 +3926,18 @@ def register(mcp: FastMCP) -> None:
         if protos:
             route_schematic_create(protos)
 
+        from kicad_mcp.ipc.runtime_gate import _open_schematic_for_ipc
+
+        try:
+            target = _open_schematic_for_ipc().document.sheet_path.path_human_readable or "?"
+        except Exception as exc:  # noqa: BLE001 - the drawing itself succeeded
+            target = f"unknown ({exc})"
         return (
             f"Drew {placed_symbols} symbol(s), {placed_power} power symbol(s), "
             f"{len(wires or [])} wire(s), {len(junctions or [])} junction(s), "
             f"{len(labels or [])} label(s), {len(hier_labels or [])} hierarchical label(s), "
-            f"{len(no_connects or [])} no-connect(s) over IPC. Call sch_save() to keep them."
+            f"{len(no_connects or [])} no-connect(s) on sheet {target}, over IPC. "
+            "Call sch_save() to keep them."
         )
 
     @mcp.tool()
@@ -4356,6 +4365,39 @@ def register(mcp: FastMCP) -> None:
             return "Schematic is already empty (nothing to delete)."
         breakdown = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
         return f"Cleared {total} items via IPC ({breakdown}). {SCH_IPC_PERSISTENCE_HINT}"
+
+    @mcp.tool()
+    def sch_delete_items(
+        wires: list[list[float]] | None = None,
+        labels: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Delete wires and labels on the active sheet, over IPC.
+
+        Each item is named by where it is, as it was given to sch_draw. Nothing is
+        saved until sch_save().
+
+        Args:
+            wires: ``[x1, y1, x2, y2]`` each, in mm; either direction matches.
+            labels: ``{"name", "x", "y"}`` each; local and hierarchical labels match.
+        """
+        from kicad_mcp.ipc.runtime_gate import (
+            SCH_IPC_PERSISTENCE_HINT,
+            SchematicIPCRequiredError,
+            get_active_sheet,
+            route_schematic_delete_items,
+        )
+
+        try:
+            done = route_schematic_delete_items(wires, labels)
+        except SchematicIPCRequiredError as exc:
+            return f"Nothing deleted: {exc}"
+        lines = [
+            f"Deleted {done['wires']} wire(s) and {done['labels']} label(s) on sheet "
+            f"{get_active_sheet() or '/'}. {SCH_IPC_PERSISTENCE_HINT}"
+        ]
+        if done["missing"]:
+            lines.append("Not found: " + "; ".join(done["missing"]))
+        return "\n".join(lines)
 
     @mcp.tool()
     def sch_delete_symbol(reference: str) -> str:

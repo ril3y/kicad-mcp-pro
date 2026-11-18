@@ -163,6 +163,14 @@ async def main():
         "dev_call_tool", {"name": "kicad_get_project_info", "arguments": {}}
     ))
     assert "Current project configuration" in through, through
+    # A second reload must still reach the server the client talks to, not the copy
+    # built by the first reload.
+    import sys
+    reloaded = text(await server.call_tool("dev_reload_tools", {}))
+    assert "Reloaded." in reloaded, reloaded
+    live_fn = server._tool_manager._tools["sch_draw"].fn
+    current = sys.modules["kicad_mcp.tools.schematic"]
+    assert live_fn.__globals__ is current.__dict__, "second reload left stale tools in place"
     print("RELOAD-OK")
 
 asyncio.run(main())
@@ -187,3 +195,34 @@ def test_dev_tools_reload_and_call_in_a_fresh_process(tmp_path: Path) -> None:
         check=False,
     )
     assert "RELOAD-OK" in done.stdout, done.stdout[-600:] + done.stderr[-1200:]
+
+
+@pytest.mark.anyio
+async def test_lib_set_pin_types_sets_many_and_refuses_bad_input(
+    sample_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = sample_project / "parts.kicad_sym"
+    library.write_text(LIBRARY, encoding="utf-8")
+    monkeypatch.setattr(
+        "kicad_mcp.tools.library.validate_via_kicad_cli", lambda text, cli, **kw: (True, "")
+    )
+    server = build_server("full")
+    args = {"symbol_name": "BASE", "library_path": str(library)}
+
+    bad_type = await call_tool_text(
+        server, "lib_set_pin_types", {**args, "pin_types": {"4": "sideways"}}
+    )
+    bad_pin = await call_tool_text(
+        server, "lib_set_pin_types", {**args, "pin_types": {"9": "input"}}
+    )
+    done = await call_tool_text(
+        server, "lib_set_pin_types", {**args, "pin_types": {"4": "output", "8": "power_in"}}
+    )
+
+    assert "Unknown pin type(s): sideways" in bad_type
+    assert "No such pin(s) on 'BASE': 9" in bad_pin
+    assert "Set the type of 1 pin(s)" in done
+    pins = symbol_library.symbol_pins(
+        symbol_library.symbol_block(library.read_text(encoding="utf-8"), "BASE") or ""
+    )
+    assert [(pin["number"], pin["type"]) for pin in pins] == [("4", "output"), ("8", "power_in")]

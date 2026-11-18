@@ -412,18 +412,20 @@ def check_ipc_gate(
 # ---------------------------------------------------------------------------
 
 
-_active_sheet = ""
+# Kept in the process environment, not in a module variable: after dev_reload_tools
+# more than one copy of this module can be alive, and they must agree on the sheet.
+_ACTIVE_SHEET_ENV = "KICAD_MCP_ACTIVE_SHEET_STATE"
+os.environ.pop(_ACTIVE_SHEET_ENV, None)  # a fresh import starts at the root sheet
 
 
 def get_active_sheet() -> str:
     """Return the sheet schematic edits are directed to; "" means the root sheet."""
-    return _active_sheet
+    return os.environ.get(_ACTIVE_SHEET_ENV, "")
 
 
 def set_active_sheet(sheet: str) -> None:
     """Direct later schematic edits to a sheet, by name or path; "" or "/" is the root."""
-    global _active_sheet
-    _active_sheet = "" if sheet.strip() in ("", "/") else sheet.strip()
+    os.environ[_ACTIVE_SHEET_ENV] = "" if sheet.strip() in ("", "/") else sheet.strip()
 
 
 def list_sheet_paths(client: Any, document: Any) -> list[tuple[str, str, Any]]:  # noqa: ANN401
@@ -448,9 +450,24 @@ def list_sheet_paths(client: Any, document: Any) -> list[tuple[str, str, Any]]: 
 def _target_document(client: Any, docs: list[Any]) -> Any:  # noqa: ANN401
     """Return the open schematic document, pointed at the active sheet when one is set."""
     doc = docs[0]
-    if not _active_sheet:
+    active = get_active_sheet()
+    if not active:
+        # Name the root sheet outright: the document KiCad reports points at whichever
+        # sheet was edited last, so "no active sheet" would otherwise follow that one.
+        try:
+            paths = list_sheet_paths(client, doc)
+        except Exception as exc:  # noqa: BLE001 - an editor too old to list its sheets
+            logger.warning("schematic_root_sheet_lookup_failed", error=str(exc))
+            return doc
+        for human_path, _name, sheet_path in paths:
+            if human_path == "/":
+                target = type(doc)()
+                target.CopyFrom(doc)
+                target.sheet_path.CopyFrom(sheet_path)
+                return target
+        logger.warning("schematic_root_sheet_not_reported")
         return doc
-    wanted = _active_sheet.strip("/").casefold()
+    wanted = active.strip("/").casefold()
     for human_path, name, sheet_path in list_sheet_paths(client, doc):
         if wanted in (human_path.strip("/").casefold(), name.casefold()):
             target = type(doc)()
@@ -458,7 +475,7 @@ def _target_document(client: Any, docs: list[Any]) -> Any:  # noqa: ANN401
             target.sheet_path.CopyFrom(sheet_path)
             return target
     raise SchematicIPCRequiredError(
-        f"Active sheet {_active_sheet!r} was not found in the open schematic. "
+        f"Active sheet {active!r} was not found in the open schematic. "
         "Call sch_set_active_sheet() with a sheet from sch_list_sheets()."
     )
 
@@ -1419,6 +1436,107 @@ def route_schematic_delete_by_reference(
         symbols_deleted=matched,
     )
     return (matched, 0)
+
+
+def route_schematic_delete_items(
+    wires: list[list[float]] | None = None,
+    labels: list[dict[str, Any]] | None = None,
+    *,
+    kicad_factory: _KiCadFactory | None = None,
+) -> dict[str, Any]:
+    """Delete wires and labels on the active sheet, each named by where it is.
+
+    ``wires`` are ``[x1, y1, x2, y2]`` in mm, either direction. ``labels`` are
+    ``{"name", "x", "y"}``; local and hierarchical labels both match. Returns the
+    counts deleted and the entries that matched nothing.
+    """
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        kicad_factory = MasterKiCadClient
+
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        DeleteItems,
+        DeleteItemsResponse,
+        GetItems,
+        GetItemsResponse,
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import (
+        KOT_SCH_HIER_LABEL,
+        KOT_SCH_LABEL,
+        KOT_SCH_LINE,
+    )
+    from kicad_mcp._master_proto.mp.schematic import schematic_types_pb2 as sch_types
+
+    client = kicad_factory()
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    if not docs:
+        raise SchematicIPCRequiredError("No schematic document is open in eeschema.")
+    doc = _target_document(client, docs)
+
+    def fetch(kind: Any, message_cls: Any) -> list[Any]:  # noqa: ANN401
+        request = GetItems()
+        request.header.document.CopyFrom(doc)
+        request.types.append(kind)
+        found = []
+        for packed in client.send(request, GetItemsResponse).items:
+            message = message_cls()
+            if packed.Unpack(message):
+                found.append(message)
+        return found
+
+    def nm(value: float) -> int:
+        return int(round(float(value) * 1_000_000))
+
+    delete = DeleteItems()
+    delete.header.document.CopyFrom(doc)
+    missing: list[str] = []
+    wires_deleted = labels_deleted = 0
+
+    if wires:
+        existing = fetch(KOT_SCH_LINE, sch_types.SchematicLine)
+        for x1, y1, x2, y2 in wires:
+            ends = {(nm(x1), nm(y1)), (nm(x2), nm(y2))}
+            hits = [
+                line
+                for line in existing
+                if {(line.start.x_nm, line.start.y_nm), (line.end.x_nm, line.end.y_nm)} == ends
+            ]
+            if not hits:
+                missing.append(f"wire ({x1}, {y1}) - ({x2}, {y2})")
+            for line in hits:
+                delete.item_ids.add().value = line.id.value
+                wires_deleted += 1
+
+    if labels:
+        existing_labels = fetch(KOT_SCH_LABEL, sch_types.LocalLabel) + fetch(
+            KOT_SCH_HIER_LABEL, sch_types.HierarchicalLabel
+        )
+        for wanted in labels:
+            at = (nm(wanted["x"]), nm(wanted["y"]))
+            hits = [
+                label
+                for label in existing_labels
+                if label.text.text == wanted["name"]
+                and (label.position.x_nm, label.position.y_nm) == at
+            ]
+            if not hits:
+                missing.append(f"label {wanted['name']!r} at ({wanted['x']}, {wanted['y']})")
+            for label in hits:
+                delete.item_ids.add().value = label.id.value
+                labels_deleted += 1
+
+    if wires_deleted or labels_deleted:
+        client.send(delete, DeleteItemsResponse)
+    return {"wires": wires_deleted, "labels": labels_deleted, "missing": missing}
 
 
 def route_schematic_clear_all(
