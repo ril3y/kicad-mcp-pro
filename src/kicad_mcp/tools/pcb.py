@@ -4554,10 +4554,13 @@ def register(mcp: FastMCP) -> None:
         return f"Moved {summary} by ({dx_mm}, {dy_mm}) mm. {hint}"
 
     @mcp.tool()
-    def pcb_delete_block_copper(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> str:
+    def pcb_delete_block_copper(
+        x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float, zones: bool = True
+    ) -> str:
         """Delete the routing of a block: tracks, vias and zones wholly inside a rectangle.
 
         Footprints are kept. Use it before laying a block out again somewhere else.
+        Pass ``zones=False`` to keep the zones and delete only tracks and vias.
         Nothing is saved until pcb_save().
         """
         hint = _PERSISTENCE_HINT
@@ -4579,7 +4582,7 @@ def register(mcp: FastMCP) -> None:
             if inside(via.position):
                 doomed.append(via.id)
                 counts["vias"] += 1
-        for zone in cast(Iterable[Any], board.get_zones()):
+        for zone in cast(Iterable[Any], board.get_zones()) if zones else []:
             box = zone.bounding_box()
             corner = Vector2.from_xy(box.pos.x + box.size.x, box.pos.y + box.size.y)
             if inside(box.pos) and inside(corner):
