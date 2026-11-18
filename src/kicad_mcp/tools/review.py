@@ -169,24 +169,55 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-def serve(folder: Path, port: int) -> str:
-    """Serve ``folder`` on localhost; reuse the running server when there is one."""
+def _lan_address() -> str | None:
+    """This machine's address on the local network, if it has one."""
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))  # no packet is sent; this only picks a route
+        return str(probe.getsockname()[0])
+    except OSError:
+        return None
+    finally:
+        probe.close()
+
+
+def page_url() -> str | None:
+    """Address of the running review page, or None when it is not being served."""
+    if _server is None:
+        return None
+    host, port = _server.server_address[0], _server.server_address[1]
+    if host in ("0.0.0.0", ""):  # noqa: S104 - reporting the bind address, not binding
+        host = _lan_address() or "127.0.0.1"
+    return f"http://{host}:{port}/"
+
+
+def serve(folder: Path, port: int, host: str = "127.0.0.1") -> str:
+    """Serve ``folder`` over HTTP; reuse the running server when there is one.
+
+    A server already running on a different ``host`` is restarted on the new one.
+    """
     global _server
     with _server_lock:
+        if _server is not None and _server.server_address[0] == host:
+            return page_url() or ""
         if _server is not None:
-            return f"http://127.0.0.1:{_server.server_address[1]}/"
+            _server.shutdown()
+            _server.server_close()
+            _server = None
         handler = partial(_QuietHandler, directory=str(folder))
         last_error: OSError | None = None
         for candidate in range(port, port + 20):
             try:
-                _server = ThreadingHTTPServer(("127.0.0.1", candidate), handler)
+                _server = ThreadingHTTPServer((host, candidate), handler)
                 break
             except OSError as exc:
                 last_error = exc
         if _server is None:
             raise OSError(f"No free port from {port} to {port + 19}: {last_error}")
         threading.Thread(target=_server.serve_forever, daemon=True).start()
-        return f"http://127.0.0.1:{_server.server_address[1]}/"
+        return page_url() or ""
 
 
 def register(mcp: FastMCP) -> None:
@@ -194,23 +225,30 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def review_serve(port: int = 8765) -> str:
-        """Start the review page on localhost and return its address.
+    def review_serve(port: int = 8765, host: str = "127.0.0.1") -> str:
+        """Start the review page over HTTP and return its address.
 
         The page shows every review item: the datasheet figure beside what was built
-        or proposed. It is served only on this machine, from ``<project>/review/``,
-        for as long as this MCP server runs; call this again after a reconnect.
+        or proposed. Only ``<project>/review/`` is served, read-only, for as long as
+        this MCP server runs; call this again after a reconnect.
 
         Args:
             port: First port to try; the next free one up to 19 higher is used.
+            host: Address to listen on. The default "127.0.0.1" is reachable from this
+                machine only. "0.0.0.0" makes the page reachable from other devices on
+                the network, without a password: use it only when the owner asks.
         """
         folder = _review_dir()
         write_page(folder, _load(folder))
         try:
-            url = serve(folder, port)
+            url = serve(folder, port, host)
         except OSError as exc:
             return f"The review page could not be served: {exc}"
-        return f"Review page: {url} ({len(_load(folder))} item(s)). Files: {folder}"
+        scope = "this machine only" if host.startswith("127.") else "any device on the network"
+        return (
+            f"Review page: {url} ({len(_load(folder))} item(s)), reachable from {scope}. "
+            f"Files: {folder}"
+        )
 
     @mcp.tool()
     @headless_compatible
@@ -306,9 +344,7 @@ def register(mcp: FastMCP) -> None:
             index = write_page(folder, items)
         except (ValueError, OSError) as exc:
             return f"Review item not added: {exc}"
-        where = (
-            f"http://127.0.0.1:{_server.server_address[1]}/" if _server is not None else str(index)
-        )
+        where = page_url() or str(index)
         return (
             f"Review item '{title}' saved ({', '.join(made) or 'notes only'}). "
             f"{len(items)} item(s) on the page: {where}"
