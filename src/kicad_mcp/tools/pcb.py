@@ -3668,6 +3668,58 @@ def register(mcp: FastMCP) -> None:
         return f"{head}\n{report.strip()}{tail}"
 
     @mcp.tool()
+    def pcb_set_layer_stackup(preset: str = "jlcpcb-4-7628") -> str:
+        """Set the board's copper layer count and stackup from a fabricator preset.
+
+        Uses KiCad's own commands on the open board: it enables the inner copper
+        layers and writes each layer's thickness and material. Use this instead of
+        pcb_set_stackup, which edits the board file as text. Nothing is saved until
+        pcb_save().
+
+        Args:
+            preset: "jlcpcb-4-7628" (JLCPCB JLC04161H-7628: 4 layers, 1.6 mm, 1 oz
+                outer and 0.5 oz inner copper, 7628 prepreg over a 1.065 mm core) or
+                "jlcpcb-2" (2 layers, 1.6 mm).
+
+        Returns:
+            The stackup as KiCad reports it afterwards.
+        """
+        from ..ipc import board_setup
+
+        try:
+            lines = board_setup.set_stackup(preset)
+        except (ValueError, RuntimeError) as exc:
+            return f"Stackup not set: {exc}"
+        description = board_setup.STACKUP_PRESETS[preset]["description"]
+        return "\n".join([f"Stackup set: {description}", *lines, _PERSISTENCE_HINT])
+
+    @mcp.tool()
+    def pcb_set_fab_rules(preset: str = "jlcpcb-multilayer") -> str:
+        """Write a fabricator's minimum constraints into the board setup.
+
+        Sets the limits KiCad's design rule check tests against (clearance, track
+        width, via size and drill, annular ring, hole spacing, copper to edge,
+        silkscreen text) through KiCad's own command on the open board. The values
+        are conservative ones inside the fabricator's published limits; a design that
+        needs tighter ones should be checked against the fabricator's current table.
+        Nothing is saved until pcb_save().
+
+        Args:
+            preset: "jlcpcb-multilayer" (4-6 layers) or "jlcpcb-2-layer".
+
+        Returns:
+            Each constraint as KiCad reports it afterwards.
+        """
+        from ..ipc import board_setup
+
+        try:
+            lines = board_setup.set_rules(preset)
+        except (ValueError, RuntimeError) as exc:
+            return f"Rules not set: {exc}"
+        description = board_setup.RULE_PRESETS[preset]["description"]
+        return "\n".join([f"Board constraints set: {description}", *lines, _PERSISTENCE_HINT])
+
+    @mcp.tool()
     def pcb_tidy_text(
         show_values: bool = False,
         reference_size_mm: float = 0.8,

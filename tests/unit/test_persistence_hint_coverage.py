@@ -35,6 +35,9 @@ from kicad_mcp.connection import PERSISTENCE_HINT
 # rules in memory and the user typically wants to re-save the board to
 # trigger a fresh rule reload. The hint reminds the agent to follow up.
 _IPC_MUTATING_TOOLS = [
+    "pcb_set_layer_stackup",
+    "pcb_set_fab_rules",
+    "pcb_tidy_text",
     "pcb_refill_zones",
     "pcb_add_track",
     "pcb_add_tracks_bulk",
