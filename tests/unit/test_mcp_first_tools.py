@@ -294,6 +294,16 @@ async def test_block_tools_take_only_what_lies_inside(
     assert "Moved 1 footprints, 1 tracks, 1 vias, 0 zones" in moved
     assert {item.id for item in board.updated} == {"fp-in", "t-in", "v-in"}
 
+    class _Field:
+        def __init__(self, value: str) -> None:
+            self.text = type("T", (), {"value": value})()
+
+    board.footprints[0].reference_field = _Field("U5")
+    board.footprints[1].reference_field = _Field("R1")
+    gone = await call_tool_text(server, "pcb_delete_footprints", {"references": ["U5", "X9"]})
+    assert "Deleted U5. Not on the board: X9." in gone
+    assert board.removed == ["fp-in"]
+
     box = {"x1_mm": 104, "y1_mm": 94, "x2_mm": 122, "y2_mm": 111}
     deleted = await call_tool_text(server, "pcb_delete_block_copper", box)
     assert "Deleted 1 tracks, 1 vias, 0 zones" in deleted

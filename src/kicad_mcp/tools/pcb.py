@@ -3637,6 +3637,31 @@ def register(mcp: FastMCP) -> None:
         return f"Deleted {len(kiids)} item(s). {_PERSISTENCE_HINT}"
 
     @mcp.tool()
+    def pcb_delete_footprints(references: list[str]) -> str:
+        """Delete footprints from the board by reference designator.
+
+        Use it to bring a changed library footprint onto the board: delete the
+        part, then run pcb_import_netlist, which adds it again from the library
+        (it arrives unplaced). Nothing is saved until pcb_save().
+        """
+        hint = _PERSISTENCE_HINT
+        wanted = {reference.strip() for reference in references if reference.strip()}
+        if not wanted:
+            return "No reference designators were supplied."
+        found: dict[str, Any] = {}
+        for footprint in cast(Iterable[Any], get_board().get_footprints()):
+            reference = str(footprint.reference_field.text.value)
+            if reference in wanted:
+                found[reference] = footprint.id
+        if not found:
+            return "None of those footprints are on the board."
+        with board_transaction() as board:
+            board.remove_items_by_id(list(found.values()))
+        missing = sorted(wanted - set(found))
+        tail = f" Not on the board: {', '.join(missing)}." if missing else ""
+        return f"Deleted {', '.join(sorted(found))}.{tail} {hint}"
+
+    @mcp.tool()
     def pcb_import_netlist(
         dry_run: bool = False,
         delete_extra_footprints: bool = False,
