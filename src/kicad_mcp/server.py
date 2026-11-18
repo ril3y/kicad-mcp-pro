@@ -674,6 +674,7 @@ def _register_profile_components(
     from .prompts import workflows
     from .resources import board_state, studio_context
     from .tools import (
+        datasheet,
         dfm,
         emc_compliance,
         export,
@@ -703,6 +704,7 @@ def _register_profile_components(
         variants.register(server)
     if "library" in enabled:
         library.register(server)
+        datasheet.register(server)
     if "export" in enabled or "release_export" in enabled:
         export.register(server, include_low_level_exports="export" in enabled)
     if "validation" in enabled:

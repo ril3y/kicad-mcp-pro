@@ -222,6 +222,12 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "lib_check_stock_availability",
             "lib_find_alternative_parts",
             "lib_get_datasheet_url",
+            "ds_list",
+            "ds_add",
+            "ds_search",
+            "ds_read",
+            "ds_figures",
+            "ds_page_image",
             # v2.2.0 — generative library tools
             "lib_generate_footprint_ipc7351",
             "lib_generate_symbol_from_pintable",
