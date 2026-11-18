@@ -548,6 +548,63 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
         data = _datasheet._render_png(pdf_path, page_number, dpi, crop)
         return Image(data=data, format="png")
 
+    @mcp.tool()
+    @headless_compatible
+    @requires_dependency("datasheets")
+    def pcb_board_image(
+        layers: str = "F.Cu,F.SilkS,F.Fab,F.CrtYd,Edge.Cuts",
+        region: str = "",
+        dpi: int = 200,
+    ) -> Image:
+        """Return a picture of the board, or of one region of it, to check layout by eye.
+
+        Renders the saved board file (call pcb_save() first), not unsaved editor state.
+
+        Args:
+            layers: Comma separated layer names, drawn together in the editor's colours.
+            region: Area to show as "x1,y1,x2,y2" in board millimetres (the coordinates
+                the placement tools use). Empty shows the whole sheet.
+            dpi: Render resolution, 50-600; raise it for a small region.
+        """
+        from . import datasheet as _datasheet
+
+        if not 50 <= dpi <= 600:
+            raise ValueError("dpi must be between 50 and 600.")
+        pcb_file = _get_pcb_file()
+        pdf_path = _ensure_output_dir() / "board.pdf"
+        code, stdout, stderr = _run_cli_variants(
+            [
+                ["pcb", "export", "pdf", "--mode-single", "--layers", layers,
+                 "--output", str(pdf_path), str(pcb_file)],
+            ]
+        )  # fmt: skip
+        if code != 0:
+            raise ValueError(f"Board PDF export failed: {stderr or stdout or 'unknown error'}")
+
+        crop = ""
+        if region.strip():
+            try:
+                x1, y1, x2, y2 = (float(part) for part in region.split(","))
+            except ValueError as exc:
+                raise ValueError("region must be 'x1,y1,x2,y2' in millimetres.") from exc
+            document = _datasheet._open(pdf_path)
+            try:
+                width_pt, height_pt = document[0].get_size()
+            finally:
+                document.close()
+            width_mm, height_mm = width_pt * 25.4 / 72, height_pt * 25.4 / 72
+            left, right = sorted((x1 / width_mm, x2 / width_mm))
+            top, bottom = sorted((y1 / height_mm, y2 / height_mm))
+            left, top = max(0.0, left), max(0.0, top)
+            right, bottom = min(1.0, right), min(1.0, bottom)
+            if not (left < right and top < bottom):
+                raise ValueError(
+                    f"region lies outside the {width_mm:.0f} x {height_mm:.0f} mm sheet."
+                )
+            crop = f"{left:.5f},{top:.5f},{right:.5f},{bottom:.5f}"
+        data = _datasheet._render_png(pdf_path, 1, dpi, crop)
+        return Image(data=data, format="png")
+
     def _export_step(output_path: str = "") -> str:
         pcb_file = _get_pcb_file()
         caps = get_cli_capabilities(get_config().kicad_cli)

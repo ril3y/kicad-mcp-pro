@@ -3594,6 +3594,80 @@ def register(mcp: FastMCP) -> None:
         return f"Deleted {len(kiids)} item(s). {_PERSISTENCE_HINT}"
 
     @mcp.tool()
+    def pcb_import_netlist(
+        dry_run: bool = False,
+        delete_extra_footprints: bool = False,
+        update_footprints: bool = True,
+    ) -> str:
+        """Bring the schematic into the open board with KiCad's own netlist import.
+
+        The API form of "Update PCB from Schematic" (F8): KiCad itself loads each
+        footprint from its libraries and assigns the pad nets, so the board is exactly
+        what the GUI would produce. Use this instead of the file-writing
+        pcb_sync_from_schematic / pcb_diff_from_netlist. The board must be open in
+        KiCad's PCB editor, and the schematic saved (sch_save). New footprints arrive
+        in a cluster; place them afterwards. Nothing is saved until pcb_save().
+
+        Args:
+            dry_run: Report what would change without changing the board.
+            delete_extra_footprints: Remove board footprints that are no longer in the
+                schematic.
+            update_footprints: Replace board footprints whose assigned footprint changed.
+
+        Returns:
+            KiCad's import report with error, warning and new-footprint counts.
+        """
+        import subprocess  # noqa: S404 - runs the configured kicad-cli only
+
+        from ..ipc.runtime_gate import SchematicIPCRequiredError, route_board_import_netlist
+
+        cfg = get_config()
+        if cfg.sch_file is None or not cfg.sch_file.exists():
+            return "No schematic is configured. Call kicad_set_project() first."
+        if cfg.kicad_cli is None or not Path(cfg.kicad_cli).exists():
+            return "kicad-cli is not available, so the netlist cannot be exported."
+        out_dir = cfg.output_dir or cfg.sch_file.parent / "output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        netlist = out_dir / "netlist.net"
+        run = subprocess.run(  # noqa: S603 - fixed argv
+            [
+                str(cfg.kicad_cli),
+                "sch",
+                "export",
+                "netlist",
+                "--format",
+                "kicadsexpr",
+                "--output",
+                str(netlist),
+                str(cfg.sch_file),
+            ],  # fmt: skip
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if run.returncode != 0 or not netlist.exists():
+            detail = (run.stderr or run.stdout).strip()
+            return f"Netlist export failed: {detail or 'unknown error'}"
+        try:
+            errors, warnings, added, report = route_board_import_netlist(
+                netlist,
+                dry_run=dry_run,
+                delete_extra_footprints=delete_extra_footprints,
+                update_footprints=update_footprints,
+            )
+        except SchematicIPCRequiredError as exc:
+            return f"Netlist not imported: {exc}"
+        except Exception as exc:  # noqa: BLE001 - surface KiCad's own message
+            return f"KiCad refused the netlist import: {exc}"
+        head = (
+            f"{'Dry run: ' if dry_run else ''}KiCad netlist import: {added} new footprint(s), "
+            f"{errors} error(s), {warnings} warning(s)."
+        )
+        tail = "" if dry_run else "\nCall pcb_save() to keep the result."
+        return f"{head}\n{report.strip()}{tail}"
+
+    @mcp.tool()
     def pcb_save() -> str:
         """Save the active board."""
         save = cast(Callable[[], None], get_board().save)

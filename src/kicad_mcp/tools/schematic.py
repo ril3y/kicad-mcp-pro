@@ -3932,6 +3932,40 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def sch_add_sheet_pins(sheet: str, pins: list[dict[str, Any]]) -> str:
+        """Add pins to a sub-sheet's block on the root sheet, over IPC.
+
+        A sheet pin joins the hierarchical label of the same name inside the sub-sheet
+        to whatever is wired to the pin on the root sheet. Returns each pin's position
+        so wires or labels can be attached with sch_draw (set the active sheet to the
+        root first). Pins that already exist are kept and their positions returned.
+
+        Args:
+            sheet: Sub-sheet name as in sch_list_sheets(), e.g. "Power 3V3".
+            pins: ``{"name", "side"?, "shape"?, "offset_mm"?}`` each. ``name`` must match
+                the hierarchical label in the sub-sheet exactly. ``side`` is "left"
+                (default) or "right". ``shape`` is "input", "output", "bidirectional" or
+                "passive" (default). ``offset_mm`` is the distance below the block's top
+                edge; left out, pins are spaced 2.54 mm apart down the chosen side.
+        """
+        from kicad_mcp.ipc.runtime_gate import (
+            SchematicIPCRequiredError,
+            route_schematic_add_sheet_pins,
+        )
+
+        try:
+            results = route_schematic_add_sheet_pins(sheet, pins)
+        except SchematicIPCRequiredError as exc:
+            return f"sch_add_sheet_pins requires live IPC: {exc}"
+        except (ValueError, KeyError) as exc:
+            return f"Sheet pins not added: {exc}"
+        lines = [f"Sheet '{sheet}' pins (call sch_save() to keep new ones):"]
+        for name, x_mm, y_mm, added in results:
+            state = "added" if added else "already there"
+            lines.append(f"- {name} at ({x_mm:.2f}, {y_mm:.2f}) mm, {state}")
+        return "\n".join(lines)
+
+    @mcp.tool()
     def sch_add_bus(
         x1_mm: float,
         y1_mm: float,

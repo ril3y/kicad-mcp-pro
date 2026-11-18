@@ -1493,7 +1493,10 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @headless_compatible
     def kicad_create_new_project(path: str, name: str, confirm_overwrite: bool = False) -> str:
-        """Create a new minimal KiCad project structure and activate it."""
+        """Create a new minimal KiCad project structure and activate it.
+
+        The project is created in ``<path>/<name>/``: pass the parent folder as ``path``.
+        """
         payload = CreateProjectInput(path=path, name=name)
         cfg = get_config()
         base_dir = Path(payload.path).expanduser().resolve()
@@ -1524,6 +1527,18 @@ def register(mcp: FastMCP) -> None:
             '(kicad_pcb (version 20250316) (generator "kicad-mcp-pro"))\n',
             encoding="utf-8",
         )
+        # Have KiCad rewrite the stub as a complete empty board (layers, setup, stackup).
+        # Tools and KiCad itself then edit a well-formed file instead of a one-line stub.
+        cli = getattr(cfg, "kicad_cli", None)
+        if cli is not None and Path(cli).exists():
+            import subprocess  # noqa: S404 - runs the configured kicad-cli only
+
+            subprocess.run(  # noqa: S603
+                [str(cli), "pcb", "upgrade", "--force", str(pcb_file)],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
         sch_file.write_text(
             (
                 "(kicad_sch\n"

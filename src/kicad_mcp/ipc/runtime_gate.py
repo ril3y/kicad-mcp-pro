@@ -46,6 +46,7 @@ import os
 import re
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -450,6 +451,205 @@ def _target_document(client: Any, docs: list[Any]) -> Any:  # noqa: ANN401
         f"Active sheet {_active_sheet!r} was not found in the open schematic. "
         "Call sch_set_active_sheet() with a sheet from sch_list_sheets()."
     )
+
+
+def route_board_import_netlist(
+    netlist_path: Path,
+    *,
+    dry_run: bool = False,
+    delete_extra_footprints: bool = False,
+    update_footprints: bool = True,
+    kicad_factory: _KiCadFactory | None = None,
+) -> tuple[int, int, int, str]:
+    """Run KiCad's own netlist import on the open board.
+
+    This is the API form of "Update PCB from Schematic": KiCad loads the footprints
+    from its libraries, assigns pad nets and reports what changed. Returns
+    ``(errors, warnings, new_footprints, report)``. Raises
+    :class:`SchematicIPCRequiredError` when no board is open in the PCB editor.
+    """
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    from kicad_mcp._master_proto.mp.board.board_commands_pb2 import (
+        NMM_UUID,
+        ImportNetlist,
+        ImportNetlistResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+
+    from ._master_client import ApiError
+
+    client = kicad_factory()
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_PCB
+    try:
+        docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    except ApiError as exc:
+        raise SchematicIPCRequiredError(
+            "The PCB editor is not open in KiCad. Open the board (PCB Editor) and try again."
+        ) from exc
+    if not docs:
+        raise SchematicIPCRequiredError(
+            "No board is open in KiCad's PCB editor. Open the board and try again."
+        )
+
+    request = ImportNetlist()
+    request.board.CopyFrom(docs[0])
+    request.netlist_path = str(netlist_path)
+    request.dry_run = dry_run
+    request.match_mode = NMM_UUID
+    request.delete_extra_footprints = delete_extra_footprints
+    request.update_footprints = update_footprints
+    response = client.send(request, ImportNetlistResponse)
+    return (
+        int(response.error_count),
+        int(response.warning_count),
+        int(response.new_footprint_count),
+        str(response.report),
+    )
+
+
+_SHEET_PIN_GRID_NM = 1_270_000
+
+
+def route_schematic_add_sheet_pins(
+    sheet: str,
+    pins: list[dict[str, Any]],
+    *,
+    kicad_factory: _KiCadFactory | None = None,
+) -> list[tuple[str, float, float, bool]]:
+    """Add pins to a sheet block on the root sheet; return ``(name, x_mm, y_mm, added)``.
+
+    A pin joins the hierarchical label of the same name inside the sub-sheet to
+    whatever is wired to the pin on the root sheet. Pins that already exist are
+    left alone and reported with ``added`` false, so the call can be repeated.
+    """
+    ok, reason = check_ipc_gate(kicad_factory=kicad_factory)
+    if not ok:
+        raise SchematicIPCRequiredError(reason)
+    if kicad_factory is None:
+        from ._master_client import MasterKiCadClient
+
+        def _factory() -> MasterKiCadClient:
+            return MasterKiCadClient()
+
+        kicad_factory = _factory
+
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetItems,
+        GetItemsResponse,
+        GetOpenDocuments,
+        GetOpenDocumentsResponse,
+        ItemStatusCode,
+        UpdateItems,
+        UpdateItemsResponse,
+    )
+    from kicad_mcp._master_proto.mp.common.types.base_types_pb2 import DocumentType
+    from kicad_mcp._master_proto.mp.common.types.enums_pb2 import KOT_SCH_SHEET
+    from kicad_mcp._master_proto.mp.schematic import schematic_types_pb2 as sch_types
+
+    from ._master_client import ApiError, MasterAny
+
+    sides = {"left": sch_types.SHS_LEFT, "right": sch_types.SHS_RIGHT}
+    shapes = {
+        "input": sch_types.SLSH_INPUT,
+        "output": sch_types.SLSH_OUTPUT,
+        "bidirectional": sch_types.SLSH_BIDI,
+        "passive": sch_types.SLSH_PASSIVE,
+    }
+
+    client = kicad_factory()
+    docs_req = GetOpenDocuments()
+    docs_req.type = DocumentType.DOCTYPE_SCHEMATIC
+    docs = list(client.send(docs_req, GetOpenDocumentsResponse).documents)
+    if not docs:
+        raise SchematicIPCRequiredError("No schematic document is open in eeschema.")
+    root_doc = type(docs[0])()
+    root_doc.CopyFrom(docs[0])
+    for human_path, _name, sheet_path in list_sheet_paths(client, docs[0]):
+        if human_path == "/":
+            root_doc.sheet_path.CopyFrom(sheet_path)
+            break
+
+    items_req = GetItems()
+    items_req.header.document.CopyFrom(root_doc)
+    items_req.types.append(KOT_SCH_SHEET)
+    wanted = sheet.strip("/").casefold()
+    block = None
+    for item in client.send(items_req, GetItemsResponse).items:
+        candidate = sch_types.SheetSymbol()
+        if item.Unpack(candidate) and candidate.name_field.text.text.casefold() == wanted:
+            block = candidate
+            break
+    if block is None:
+        raise ValueError(f"No sheet block named {sheet!r} on the root sheet.")
+
+    existing = {pin.text.text: pin for pin in block.pins}
+    used = {side: 0 for side in sides}
+    for pin in block.pins:
+        for side, code in sides.items():
+            if pin.side == code:
+                used[side] += 1
+    results: list[tuple[str, float, float, bool]] = []
+    changed = False
+    for spec in pins:
+        name = str(spec["name"])
+        if name in existing:
+            pin = existing[name]
+            results.append((name, pin.position.x_nm / 1e6, pin.position.y_nm / 1e6, False))
+            continue
+        side = str(spec.get("side", "left")).casefold()
+        shape = str(spec.get("shape", "passive")).casefold()
+        if side not in sides:
+            raise ValueError(f"Pin {name!r}: side must be 'left' or 'right'.")
+        if shape not in shapes:
+            raise ValueError(f"Pin {name!r}: shape must be one of {', '.join(shapes)}.")
+        if "offset_mm" in spec:
+            offset_nm = int(round(float(spec["offset_mm"]) * 1e6))
+        else:
+            offset_nm = (used[side] + 1) * 2 * _SHEET_PIN_GRID_NM
+        offset_nm = round(offset_nm / _SHEET_PIN_GRID_NM) * _SHEET_PIN_GRID_NM
+        if not 0 < offset_nm < block.size.y_nm:
+            raise ValueError(
+                f"Pin {name!r} does not fit on the {side} edge of the sheet block "
+                f"({block.size.y_nm / 1e6:.2f} mm tall)."
+            )
+        pin = block.pins.add()
+        pin.text.text = name
+        pin.position.x_nm = block.position.x_nm + (block.size.x_nm if side == "right" else 0)
+        pin.position.y_nm = block.position.y_nm + offset_nm
+        pin.side = sides[side]
+        pin.shape = shapes[shape]
+        used[side] += 1
+        existing[name] = pin
+        results.append((name, pin.position.x_nm / 1e6, pin.position.y_nm / 1e6, True))
+        changed = True
+
+    if changed:
+        update = UpdateItems()
+        update.header.document.CopyFrom(root_doc)
+        packed = MasterAny()
+        packed.Pack(block)
+        update.items.append(packed)
+        response = client.send(update, UpdateItemsResponse)
+        for result in response.updated_items:
+            if result.status.code != ItemStatusCode.ISC_OK:
+                raise ApiError(
+                    f"KiCad rejected the sheet pin update: {result.status.error_message}",
+                    status_code=int(result.status.code),
+                    raw_message=result.status.error_message,
+                )
+    return results
 
 
 def _open_schematic_for_ipc(
