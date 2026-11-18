@@ -404,6 +404,30 @@ async def test_project_library_tools_make_parts_kicad_can_find(sample_project: P
         },
     )
 
+    part = await call_tool_text(
+        server,
+        "lib_derive_part",
+        {
+            "base_library": "Device",
+            "base_symbol": "R",
+            "name": "R_10k_0603",
+            "library": "Parts",
+            "value": "10k",
+            "footprint": "Resistor_SMD:R_0603_1608Metric",
+            "mpn": "RC0603FR-0710KL",
+        },
+    )
+    missing_part = await call_tool_text(
+        server,
+        "lib_derive_part",
+        {"base_library": "Device", "base_symbol": "NOPE", "name": "X", "library": "Parts"},
+    )
+
+    assert "Part Parts:R_10k_0603 saved" in part
+    assert "was not found" in missing_part
+    parts_text = (sample_project / "libs" / "Parts.kicad_sym").read_text("utf-8")
+    assert '(symbol "R_10k_0603"' in parts_text
+    assert "RC0603FR-0710KL" in parts_text
     assert "Footprint Parts:ODD-2 saved" in footprint
     assert "Pad numbers: 1, 2 (3 rectangles" in footprint
     assert "Footprint generation failed" in bad_footprint

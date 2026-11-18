@@ -110,3 +110,57 @@ def test_footprint_from_pads_needs_complete_pads() -> None:
         generate_footprint_from_pads(
             "BAD", [{"number": 1, "x_mm": 0, "y_mm": 0, "h_mm": 1}], 1.0, 1.0
         )
+
+
+def test_derived_part_carries_its_fields_and_renames_units() -> None:
+    base = (
+        '(symbol "C"\n\t\t(property "Reference" "C"\n\t\t\t(at 0 0 0)\n\t\t)\n'
+        '\t\t(property "Value" "C"\n\t\t\t(at 0 0 0)\n\t\t)\n'
+        '\t\t(property "Footprint" ""\n\t\t\t(at 0 0 0)\n\t\t)\n'
+        '\t\t(symbol "C_0_1"\n\t\t\t(polyline)\n\t\t)\n'
+        '\t\t(symbol "C_1_1"\n\t\t\t(pin passive line)\n\t\t)\n\t)'
+    )
+
+    block = project_library.derive_symbol_block(base, "C", "C_100nF")
+    block = project_library.set_symbol_fields(
+        block, {"Value": "100nF", "Footprint": "Lib:C_0603", "MPN": 'AB"C'}
+    )
+
+    assert block.startswith('(symbol "C_100nF"')
+    assert '(symbol "C_100nF_0_1"' in block
+    assert '(symbol "C_100nF_1_1"' in block
+    assert '(property "Value" "100nF"' in block
+    assert '(property "Footprint" "Lib:C_0603"' in block
+    assert '(property "Reference" "C"' in block
+    assert '(property "MPN" "AB\\"C"' in block
+    # The added field sits with the other properties, before the unit sub-symbols.
+    assert block.index('(property "MPN"') < block.index('(symbol "C_100nF_0_1"')
+    assert block.count("(") == block.count(")")
+
+
+def test_derived_symbols_are_refused_as_a_base() -> None:
+    with pytest.raises(ValueError, match="derive from its parent"):
+        project_library.derive_symbol_block('(symbol "B"\n\t(extends "A")\n)', "B", "NEW")
+
+
+def test_generated_symbol_is_wide_enough_for_facing_pin_names() -> None:
+    text = generate_symbol(
+        "WIDE",
+        [
+            PinSpec(number="1", name="MODE/SYNC", side="left"),
+            PinSpec(number="2", name="VOUT/BIAS", side="right"),
+        ],
+    )
+    import re
+
+    start_x, end_x = (
+        float(v)
+        for v in re.search(
+            r"\(rectangle \(start (-?[\d.]+) [-\d.]+\) \(end (-?[\d.]+)", text
+        ).groups()
+    )
+    # 18 characters of names need more than the old fixed 10.16 mm body.
+    assert end_x - start_x >= 18 * 1.1
+    # Pin ends stay on the 2.54 mm grid.
+    pin_x = float(re.search(r"\(pin \w+ \w+\s*\(at (-?[\d.]+)", text).group(1))
+    assert abs(pin_x / 2.54 - round(pin_x / 2.54)) < 1e-6

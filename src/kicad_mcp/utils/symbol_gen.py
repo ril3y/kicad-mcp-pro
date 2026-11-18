@@ -46,6 +46,9 @@ _SIDE_DIR: dict[PinSide, str] = {
 _PIN_PITCH = 2.54  # mm (100 mil)
 _PIN_LENGTH = 2.54  # mm (100 mil)
 _BOX_PAD = 2.54  # mm margin inside body rectangle
+_NAME_CHAR_W = 1.1  # mm per pin-name character at the 1.27 mm text size
+_NAME_OFFSET = 1.016  # mm between the body edge and a pin name
+_NAME_GAP = 2.54  # mm kept clear between facing pin names
 
 
 @dataclass
@@ -103,10 +106,18 @@ def _side_geometry(
     top_w = max(len(groups["top"]) - 1, 0) * _PIN_PITCH + _BOX_PAD * 2
     bot_w = max(len(groups["bottom"]) - 1, 0) * _PIN_PITCH + _BOX_PAD * 2
     body_h = max(left_h, right_h, 2 * _PIN_PITCH)
-    body_w = max(top_w, bot_w, 4 * _PIN_PITCH)
-    # Round up to nearest grid
-    body_h = math.ceil(body_h / _PIN_PITCH) * _PIN_PITCH
-    body_w = math.ceil(body_w / _PIN_PITCH) * _PIN_PITCH
+    # Room for the longest pin name on each side, so facing names do not overlap.
+    longest_left = max((len(pin.name) for pin in groups["left"]), default=0)
+    longest_right = max((len(pin.name) for pin in groups["right"]), default=0)
+    names_w = (longest_left + longest_right) * _NAME_CHAR_W + 2 * _NAME_OFFSET + _NAME_GAP
+    body_w = max(top_w, bot_w, names_w, 4 * _PIN_PITCH)
+    if groups["bottom"]:
+        # Names of bottom pins are drawn upwards into the body; keep them below the side pins.
+        longest_bottom = max(len(pin.name) for pin in groups["bottom"])
+        body_h += longest_bottom * _NAME_CHAR_W + _NAME_OFFSET
+    # Round up so the pin ends stay on the 2.54 mm grid (half sizes on the pin pitch).
+    body_h = math.ceil(body_h / (2 * _PIN_PITCH)) * 2 * _PIN_PITCH
+    body_w = math.ceil(body_w / (2 * _PIN_PITCH)) * 2 * _PIN_PITCH
     return body_w, body_h
 
 

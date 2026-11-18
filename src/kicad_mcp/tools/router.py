@@ -232,6 +232,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             # v2.2.0 — generative library tools
             "lib_generate_footprint_ipc7351",
             "lib_generate_footprint_from_pads",
+            "lib_derive_part",
             "lib_generate_symbol_from_pintable",
             "lib_recommend_part",
             "lib_bind_part_to_symbol",
@@ -249,6 +250,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "export_pcb_pdf",
             "export_sch_pdf",
             "sch_export_png",
+            "sch_sheet_image",
             "export_3d_step",
             "export_step",
             "export_3d_render",

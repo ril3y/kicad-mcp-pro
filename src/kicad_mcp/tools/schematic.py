@@ -760,6 +760,17 @@ def _snap_point(x: float, y: float, enabled: bool) -> tuple[float, float]:
     return _snap_schematic_coord(x, grid_mm), _snap_schematic_coord(y, grid_mm)
 
 
+def _snap_connection_point(x: float, y: float, enabled: bool) -> tuple[float, float]:
+    """Snap an item that must sit on a wire or pin end (label, power symbol, no-connect).
+
+    These use the wire grid, not the coarser symbol grid: passive pins end on the
+    1.27 mm grid, and a label snapped to 2.54 mm lands beside the wire it names.
+    """
+    if not enabled:
+        return x, y
+    return _snap_wire_coord(x), _snap_wire_coord(y)
+
+
 def _snap_line(
     x1: float,
     y1: float,
@@ -3774,7 +3785,7 @@ def register(mcp: FastMCP) -> None:
             rotation=rotation,
             snap_to_grid=snap_to_grid,
         )
-        label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
+        label_x, label_y = _snap_connection_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
         proto = build_local_label_proto(label_x, label_y, payload.name)
         outcome = route_schematic_create([proto])
@@ -3795,7 +3806,7 @@ def register(mcp: FastMCP) -> None:
         is a thin wrapper around ``sch_add_symbol`` that dispatches to
         the ``PlaceSymbolFromLibrary`` IPC command.
         """
-        target_x, target_y = _snap_point(x_mm, y_mm, snap_to_grid)
+        target_x, target_y = _snap_connection_point(x_mm, y_mm, snap_to_grid)
         snap_note = _snap_notice((x_mm, y_mm), (target_x, target_y))
 
         outcome = route_schematic_place_symbol(
@@ -3867,7 +3878,9 @@ def register(mcp: FastMCP) -> None:
     def sch_add_no_connect(x_mm: float, y_mm: float, snap_to_grid: bool = True) -> str:
         """Add a no-connect marker over IPC; raises if eeschema IPC is unavailable."""
         payload = AddNoConnectInput(x_mm=x_mm, y_mm=y_mm, snap_to_grid=snap_to_grid)
-        marker_x, marker_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
+        marker_x, marker_y = _snap_connection_point(
+            payload.x_mm, payload.y_mm, payload.snap_to_grid
+        )
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (marker_x, marker_y))
         proto = build_no_connect_proto(marker_x, marker_y)
         outcome = route_schematic_create([proto])
@@ -4712,7 +4725,7 @@ def register(mcp: FastMCP) -> None:
             rotation=rotation,
             snap_to_grid=snap_to_grid,
         )
-        label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
+        label_x, label_y = _snap_connection_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
         proto = build_hierarchical_label_proto(label_x, label_y, payload.text)
         outcome = route_schematic_create([proto])
@@ -4742,7 +4755,7 @@ def register(mcp: FastMCP) -> None:
             rotation=rotation,
             snap_to_grid=snap_to_grid,
         )
-        label_x, label_y = _snap_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
+        label_x, label_y = _snap_connection_point(payload.x_mm, payload.y_mm, payload.snap_to_grid)
         snap_note = _snap_notice((payload.x_mm, payload.y_mm), (label_x, label_y))
         proto = build_global_label_proto(label_x, label_y, payload.text)
         outcome = route_schematic_create([proto])

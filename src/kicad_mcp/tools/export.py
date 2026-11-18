@@ -9,7 +9,7 @@ import time as _time
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import Context, FastMCP, Image
 
 from ..config import get_config
 from ..discovery import get_cli_capabilities
@@ -27,7 +27,7 @@ from .export_support import (
     _run_cli,
     _run_cli_variants,
 )
-from .metadata import headless_compatible
+from .metadata import headless_compatible, requires_dependency
 from .variants import variant_apply_to_kicad_cli_args
 
 # Public compatibility for tests and downstream monkeypatches.  These aliases
@@ -498,6 +498,55 @@ def register(mcp: FastMCP, *, include_low_level_exports: bool = True) -> None:
             return f"PNG rasterization failed: {exc}"
 
         return f"Schematic PNG exported to {png_path}"
+
+    @mcp.tool()
+    @headless_compatible
+    @requires_dependency("datasheets")
+    def sch_sheet_image(sheet: str = "", dpi: int = 150, crop: str = "") -> Image:
+        """Return a picture of one schematic sheet, to check the drawing by eye.
+
+        Renders the saved files (call sch_save() first), not unsaved editor state.
+
+        Args:
+            sheet: Sub-sheet name as in sch_list_sheets(), e.g. "Power 3V3". Empty for
+                the root sheet.
+            dpi: Render resolution, 50-300.
+            crop: Optional region as "left,top,right,bottom" fractions of the page, e.g.
+                "0.2,0.2,0.7,0.6", to enlarge the part of the sheet that is drawn on.
+        """
+        from . import datasheet as _datasheet
+
+        if not 50 <= dpi <= 300:
+            raise ValueError("dpi must be between 50 and 300.")
+        sch_file = _get_sch_file()
+        pdf_path = _ensure_output_dir() / "schematic.pdf"
+        code, stdout, stderr = _run_cli_variants(
+            [["sch", "export", "pdf", "--output", str(pdf_path), str(sch_file)]]
+        )
+        if code != 0:
+            raise ValueError(f"Schematic PDF export failed: {stderr or stdout or 'unknown error'}")
+
+        page_number = 1
+        wanted = sheet.strip().strip("/")
+        if wanted:
+            document = _datasheet._open(pdf_path)
+            try:
+                marker = f"/{wanted}/".casefold()
+                matches = [
+                    index + 1
+                    for index in range(len(document))
+                    if marker in _datasheet._page_text(document, index).casefold()
+                ]
+            finally:
+                document.close()
+            if not matches:
+                raise ValueError(
+                    f"No page for sheet {sheet!r} in the exported schematic. "
+                    "Check the name with sch_list_sheets()."
+                )
+            page_number = matches[0]
+        data = _datasheet._render_png(pdf_path, page_number, dpi, crop)
+        return Image(data=data, format="png")
 
     def _export_step(output_path: str = "") -> str:
         pcb_file = _get_pcb_file()

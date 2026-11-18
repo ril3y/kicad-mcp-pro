@@ -63,16 +63,14 @@ def footprint_library_dir(project_dir: Path, library: str) -> Path:
     return project_dir / LIBS_DIRNAME / f"{check_library_name(library)}.pretty"
 
 
-def add_symbol(project_dir: Path, library: str, name: str, generated_library_text: str) -> Path:
-    """Put the symbol ``name`` into project library ``library``, replacing an older copy.
+def add_symbol_block(project_dir: Path, library: str, name: str, block: str) -> Path:
+    """Put one ``(symbol "name" ...)`` block into project library ``library``.
 
-    ``generated_library_text`` is a complete one-symbol ``kicad_symbol_lib`` text; only
-    its symbol block is kept. The library is created and listed in ``sym-lib-table``
-    when needed.
+    An older symbol of the same name is replaced. The library is created and listed
+    in ``sym-lib-table`` when needed.
     """
-    block = symbol_blocks_of(generated_library_text)
-    if not block:
-        raise ValueError("The generated text holds no symbol.")
+    if not block.lstrip().startswith(f"(symbol {_sexpr_string(name)}"):
+        raise ValueError(f"The symbol block does not define {name!r}.")
     lib_file = symbol_library_file(project_dir, library)
     lib_file.parent.mkdir(parents=True, exist_ok=True)
     if lib_file.exists():
@@ -87,11 +85,75 @@ def add_symbol(project_dir: Path, library: str, name: str, generated_library_tex
             text = text[:start].rstrip() + "\n" + text[start + len(old_block) :].lstrip("\n")
 
     end = text.rstrip().rfind(")")
-    lib_file.write_text(text[:end].rstrip() + "\n\t" + block + "\n)\n", encoding="utf-8")
+    lib_file.write_text(text[:end].rstrip() + "\n\t" + block.strip() + "\n)\n", encoding="utf-8")
     register_library(
         project_dir, "symbol", library, f"${{KIPRJMOD}}/{LIBS_DIRNAME}/{library}.kicad_sym"
     )
     return lib_file
+
+
+def add_symbol(project_dir: Path, library: str, name: str, generated_library_text: str) -> Path:
+    """Put the symbol ``name`` into project library ``library``, replacing an older copy.
+
+    ``generated_library_text`` is a complete one-symbol ``kicad_symbol_lib`` text; only
+    its symbol block is kept.
+    """
+    block = symbol_blocks_of(generated_library_text)
+    if not block:
+        raise ValueError("The generated text holds no symbol.")
+    return add_symbol_block(project_dir, library, name, block)
+
+
+_HIDDEN_FIELD = "(at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes))"
+
+
+def set_symbol_fields(block: str, fields: dict[str, str]) -> str:
+    """Set properties on a library symbol block, adding the ones it lacks (hidden)."""
+    for field, value in fields.items():
+        pattern = re.compile(
+            r"(\(property\s+" + re.escape(_sexpr_string(field)) + r'\s+)"(?:\\.|[^"\\])*"'
+        )
+        quoted = _sexpr_string(value)
+        if pattern.search(block):
+            block = pattern.sub(lambda match, q=quoted: match.group(1) + q, block, count=1)
+            continue
+        # Insert after the last top-level property of the symbol.
+        last = None
+        for match in re.finditer(r'\n(\s*)\(property\s+"', block):
+            sub_symbol = block.find('(symbol "', 1)
+            if sub_symbol != -1 and match.start() > sub_symbol:
+                break
+            last = match
+        entry = f"(property {_sexpr_string(field)} {quoted} {_HIDDEN_FIELD})"
+        if last is None:
+            head_end = block.index("\n") if "\n" in block else len(block)
+            block = block[:head_end] + "\n\t\t" + entry + block[head_end:]
+            continue
+        prop_start = last.start() + 1 + len(last.group(1))
+        prop_block, _ = _extract_block(block, prop_start)
+        insert_at = prop_start + len(prop_block)
+        block = block[:insert_at] + "\n" + last.group(1) + entry + block[insert_at:]
+    return block
+
+
+def derive_symbol_block(base_block: str, base_name: str, new_name: str) -> str:
+    """Copy a library symbol block under a new name (its unit sub-symbols follow)."""
+    if not _NAME_PATTERN.match(new_name):
+        raise ValueError(
+            f"Invalid symbol name {new_name!r}. Use letters, digits and . _ + - (no spaces)."
+        )
+    if re.search(r"\(extends\s", base_block):
+        raise ValueError(
+            f"{base_name!r} is derived from another symbol; derive from its parent instead."
+        )
+    block = base_block.replace(
+        f"(symbol {_sexpr_string(base_name)}", f"(symbol {_sexpr_string(new_name)}", 1
+    )
+    return re.sub(
+        r'\(symbol "' + re.escape(base_name) + r'_(\d+_\d+)"',
+        lambda match: f'(symbol "{new_name}_{match.group(1)}"',
+        block,
+    )
 
 
 def add_footprint(project_dir: Path, library: str, name: str, footprint_text: str) -> Path:

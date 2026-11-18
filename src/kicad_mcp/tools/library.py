@@ -972,6 +972,7 @@ def register(mcp: FastMCP) -> None:
         footprint_hint: str = "",
         output_path: str = "",
         library: str = "",
+        fields: dict[str, str] | None = None,
     ) -> str:
         """Generate a KiCad symbol (.kicad_sym) from a pin table and save it.
 
@@ -997,6 +998,7 @@ def register(mcp: FastMCP) -> None:
             output_path: Optional relative path inside output_dir. Defaults to
                 ``symbols/<name>.kicad_sym``. Ignored when ``library`` is given.
             library: Project library name to add the symbol to (letters, digits, . _ + -).
+            fields: Extra hidden fields for the part, e.g. {"MPN": "...", "Manufacturer": "..."}.
 
         Returns:
             Confirmation with the saved file path, or an error message.
@@ -1030,6 +1032,8 @@ def register(mcp: FastMCP) -> None:
             )
         except Exception as exc:
             return f"Symbol generation failed: {exc}"
+        if fields:
+            sexpr = project_library.set_symbol_fields(sexpr, fields)
 
         cfg = get_config()
         if library:
@@ -1058,6 +1062,84 @@ def register(mcp: FastMCP) -> None:
         return (
             f"Symbol saved to {out_file}\n"
             f"Name: {name}, Pins: {len(pin_specs)}, Ref prefix: {reference_prefix}"
+        )
+
+    @mcp.tool()
+    @headless_compatible
+    def lib_derive_part(
+        base_library: str,
+        base_symbol: str,
+        name: str,
+        library: str,
+        value: str = "",
+        footprint: str = "",
+        mpn: str = "",
+        manufacturer: str = "",
+        description: str = "",
+        datasheet: str = "",
+        fields: dict[str, str] | None = None,
+    ) -> str:
+        """Make a ready-to-place part in a project library from a stock symbol.
+
+        Copies a stock symbol (for example Device:C) under a new name with its value,
+        footprint and part number already filled in, so the placed part needs no
+        changes. Prefer this to passing ``value`` or ``footprint`` to
+        ``sch_add_symbol``: on KiCad 11, changing those on a placed symbol over IPC
+        makes KiCad replace the part's library link with a private copy ("C_1"), which
+        ERC then reports.
+
+        Args:
+            base_library: Stock library of the symbol to copy, e.g. "Device".
+            base_symbol: Symbol to copy, e.g. "C". It must not itself be a derived symbol.
+            name: Name of the new part (letters, digits, . _ + -), e.g. "C_100nF_100V_0603".
+            library: Project library to put it in; created and listed in the project's
+                ``sym-lib-table`` when needed. Place it as ``library:name``.
+            value: Value text shown on the schematic. Defaults to ``name``.
+            footprint: Footprint as ``library:name``.
+            mpn: Manufacturer part number, stored in the field "MPN".
+            manufacturer: Stored in the field "Manufacturer".
+            description: Replaces the symbol description when given.
+            datasheet: Datasheet link.
+            fields: Any further hidden fields, name to text.
+
+        Returns:
+            The part's ``library:name`` and where it was saved, or an error message.
+        """
+        from ..utils import project_library
+
+        cfg = get_config()
+        if cfg.project_dir is None:
+            return "No active project is configured."
+        content = _read_symbol_file(base_library)
+        if content is None:
+            return f"Symbol library '{base_library}' was not found."
+        start = content.find(f'(symbol "{base_symbol}"')
+        if start == -1:
+            return f"Symbol '{base_library}:{base_symbol}' was not found."
+        base_block, _ = _extract_block(content, start)
+
+        wanted = {"Value": value or name}
+        for field, text in (
+            ("Footprint", footprint),
+            ("Datasheet", datasheet),
+            ("Description", description),
+            ("MPN", mpn),
+            ("Manufacturer", manufacturer),
+        ):
+            if text:
+                wanted[field] = text
+        wanted.update(fields or {})
+        try:
+            block = project_library.derive_symbol_block(base_block, base_symbol, name)
+            block = project_library.set_symbol_fields(block, wanted)
+            lib_file = project_library.add_symbol_block(cfg.project_dir, library, name, block)
+        except ValueError as exc:
+            return f"Part was not created: {exc}"
+        summary = ", ".join(f"{field}={text}" for field, text in wanted.items())
+        return (
+            f"Part {library}:{name} saved to {lib_file} (from {base_library}:{base_symbol})\n"
+            f"{summary}\n"
+            "If KiCad had the project open before this library existed, reopen the project."
         )
 
     @mcp.tool()
