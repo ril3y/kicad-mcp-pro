@@ -605,6 +605,26 @@ def route_schematic_add_sheet_pins(
         raise ValueError(f"No sheet block named {sheet!r} on the root sheet.")
 
     existing = {pin.text.text: pin for pin in block.pins}
+    # Make the block tall enough for the fullest side at 2.54 mm spacing. Pins keep
+    # their distance from the top edge, so wires already attached stay attached.
+    per_side = {side: 0 for side in sides}
+    for pin in block.pins:
+        for side, code in sides.items():
+            if pin.side == code:
+                per_side[side] += 1
+    for spec in pins:
+        if str(spec["name"]) not in existing:
+            side_name = str(spec.get("side", "left")).casefold()
+            if side_name in per_side:
+                per_side[side_name] += 1
+    needed_nm = (max(per_side.values()) + 1) * 2 * _SHEET_PIN_GRID_NM
+    grew = needed_nm > block.size.y_nm
+    if grew:
+        delta = needed_nm - block.size.y_nm
+        block.size.y_nm = needed_nm
+        # The file-name field sits under the block; keep it there.
+        block.filename_field.text.position.y_nm += delta
+
     used = {side: 0 for side in sides}
     for pin in block.pins:
         for side, code in sides.items():
@@ -645,7 +665,7 @@ def route_schematic_add_sheet_pins(
         results.append((name, pin.position.x_nm / 1e6, pin.position.y_nm / 1e6, True))
         changed = True
 
-    if changed:
+    if changed or grew:
         update = UpdateItems()
         update.header.document.CopyFrom(root_doc)
         packed = MasterAny()

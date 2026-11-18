@@ -675,6 +675,7 @@ def _register_profile_components(
     from .resources import board_state, studio_context
     from .tools import (
         datasheet,
+        dev,
         dfm,
         emc_compliance,
         export,
@@ -697,6 +698,8 @@ def _register_profile_components(
 
     router.register(server)
     project.register(server)
+    if dev.enabled():
+        dev.register(server)
 
     if "pcb_read" in enabled or "pcb_write" in enabled:
         pcb.register(server)
@@ -770,9 +773,15 @@ def build_server(profile: str | None = None, *, defer_registration: bool = False
         token_verifier=token_verifier,
     )
     server.allow_experimental_tools = selected_profile == "agent_full"
+    server.active_profile = selected_profile  # type: ignore[attr-defined]
     server.allowed_tool_names = {
         tool_name for category in enabled for tool_name in router.TOOL_CATEGORIES[category]["tools"]
     }
+    from .tools import dev as dev_tools
+
+    if dev_tools.enabled():
+        # Development tools are not part of any published category.
+        server.allowed_tool_names |= dev_tools.TOOL_NAMES
 
     @server.custom_route("/.well-known/mcp-server", methods=["GET"], include_in_schema=False)
     async def _well_known_mcp(_request: Request) -> JSONResponse:

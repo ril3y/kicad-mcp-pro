@@ -162,3 +162,59 @@ async def test_pcb_tidy_text_hides_values_and_sizes_references(
     assert board.footprints[1].value_field.visible is True
     assert len(board.updated) == 1
     assert "must be" in await call_tool_text(server, "pcb_tidy_text", {"reference_size_mm": 0.1})
+
+
+def test_sheet_block_grows_to_hold_its_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetItemsResponse,
+        GetOpenDocumentsResponse,
+        UpdateItemsResponse,
+    )
+    from kicad_mcp._master_proto.mp.schematic import schematic_types_pb2 as sch_types
+    from kicad_mcp._master_proto.mp.schematic.schematic_commands_pb2 import (
+        SchematicHierarchyResponse,
+    )
+    from kicad_mcp.ipc import runtime_gate
+    from kicad_mcp.ipc._master_client import MasterAny
+
+    block = sch_types.SheetSymbol()
+    block.name_field.text.text = "Controller"
+    block.position.x_nm, block.position.y_nm = 162_560_000, 40_640_000
+    block.size.x_nm, block.size.y_nm = 30_480_000, 20_320_000
+    block.filename_field.text.position.y_nm = 61_000_000
+    sent: dict[str, Any] = {}
+
+    class Client:
+        def send(self, command: Any, response_cls: Any) -> Any:  # noqa: ANN401
+            name = type(command).__name__
+            if name == "GetOpenDocuments":
+                reply = GetOpenDocumentsResponse()
+                reply.documents.add()
+                return reply
+            if name == "GetSchematicHierarchy":
+                reply = SchematicHierarchyResponse()
+                reply.top_level_sheets.add().path.path_human_readable = "/"
+                return reply
+            if name == "GetItems":
+                reply = GetItemsResponse()
+                packed = MasterAny()
+                packed.Pack(block)
+                reply.items.append(packed)
+                return reply
+            sent["update"] = command
+            return UpdateItemsResponse()
+
+    monkeypatch.setattr(runtime_gate, "check_ipc_gate", lambda **kwargs: (True, "ok"))
+    names = [f"SIG{index}" for index in range(10)]
+    results = runtime_gate.route_schematic_add_sheet_pins(
+        "Controller",
+        [{"name": name, "side": "left"} for name in names],
+        kicad_factory=Client,  # type: ignore[arg-type]
+    )
+
+    updated = sch_types.SheetSymbol()
+    sent["update"].items[0].Unpack(updated)
+    assert updated.size.y_nm == 11 * 2_540_000  # ten pins and a margin
+    assert updated.filename_field.text.position.y_nm == 61_000_000 + (27_940_000 - 20_320_000)
+    assert [round(y, 2) for _name, _x, y, _added in results][:2] == [43.18, 45.72]
+    assert results[-1][2] == pytest.approx(40.64 + 25.4)

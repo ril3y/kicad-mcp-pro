@@ -3947,6 +3947,9 @@ def register(mcp: FastMCP) -> None:
                 (default) or "right". ``shape`` is "input", "output", "bidirectional" or
                 "passive" (default). ``offset_mm`` is the distance below the block's top
                 edge; left out, pins are spaced 2.54 mm apart down the chosen side.
+
+        The block is made taller when a side has more pins than fit; blocks drawn below
+        it are not moved, so leave room when placing sheets.
         """
         from kicad_mcp.ipc.runtime_gate import (
             SchematicIPCRequiredError,

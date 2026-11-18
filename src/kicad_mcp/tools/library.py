@@ -113,6 +113,21 @@ def _read_symbol_file(library: str) -> str | None:
     return symbol_library.read_library_text(path)
 
 
+def _library_text(library: str) -> str | None:
+    """Text of a symbol library: a project library in ``libs/`` first, then a stock one."""
+    from ..utils import project_library
+
+    cfg = get_config()
+    if cfg.project_dir is not None:
+        try:
+            local = project_library.symbol_library_file(cfg.project_dir, library)
+        except ValueError:
+            local = None
+        if local is not None and local.exists():
+            return local.read_text(encoding="utf-8", errors="ignore")
+    return _read_symbol_file(library)
+
+
 def _expand_kicad_lib_uri_envvars(uri: str, project_dir: Path) -> str:
     """Expand ``${KIPRJMOD}`` / ``${KICAD_PROJECT_DIR}`` / OS env / KiCad
     config env vars inside a sym-lib-table URI string."""
@@ -394,35 +409,52 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     @headless_compatible
     def lib_get_symbol_info(library: str, symbol_name: str) -> str:
-        """Return details for a single symbol."""
-        content = _read_symbol_file(library)
+        """Return a symbol's description, footprint and full pin list.
+
+        Works for stock libraries and for project libraries made with lib_derive_part /
+        lib_generate_symbol_from_pintable. A stock symbol that derives from another
+        (most do) is followed to its base symbol, which is named in the answer, and the
+        base's pins are listed: number, name, electrical type and whether hidden. Check
+        this list against the datasheet's pin table before using a stock symbol; for
+        positions on a sheet use sch_get_pin_positions.
+        """
+        content = _library_text(library)
         if content is None:
             return f"Symbol library '{library}' was not found."
+        try:
+            chain = symbol_library.base_chain(content, symbol_name)
+        except KeyError as exc:
+            if exc.args[0] == symbol_name:
+                return f"Symbol '{library}:{symbol_name}' was not found."
+            return (
+                f"Symbol '{library}:{symbol_name}' derives from {exc.args[0]!r}, which is missing."
+            )
+        blocks = [symbol_library.symbol_block(content, name) or "" for name in chain]
 
-        start = content.find(f'(symbol "{symbol_name}"')
-        if start == -1:
-            return f"Symbol '{library}:{symbol_name}' was not found."
-        block, _ = _extract_block(content, start)
-        description = re.search(r'\(property\s+"Description"\s+"([^"]*)"', block)
-        keywords = re.search(r'\(property\s+"ki_keywords"\s+"([^"]*)"', block)
-        datasheet = re.search(r'\(property\s+"Datasheet"\s+"([^"]*)"', block)
-        footprint = re.search(r'\(property\s+"Footprint"\s+"([^"]*)"', block)
-        pins = re.findall(
-            r'\(pin\s+(\w+)\s+\w+.*?\(name\s+"([^"]*)".*?\(number\s+"([^"]*)"', block, re.DOTALL
-        )
+        def field(name: str) -> str:
+            for block in blocks:  # the symbol's own value first, then its parents'
+                found = re.search(rf'\(property\s+"{name}"\s+"((?:\\.|[^"\\])*)"', block)
+                if found and found.group(1):
+                    return found.group(1)
+            return ""
+
         lines = [f"Symbol: {library}:{symbol_name}"]
-        if description:
-            lines.append(f"- Description: {description.group(1)}")
-        if keywords:
-            lines.append(f"- Keywords: {keywords.group(1)}")
-        if footprint:
-            lines.append(f"- Default footprint: {footprint.group(1)}")
-        if datasheet:
-            lines.append(f"- Datasheet: {datasheet.group(1)}")
-        if pins:
-            lines.append(f"- Pins: {len(pins)}")
-            for pin in pins[:20]:
-                lines.append(f"  - {pin[2]} {pin[1]} ({pin[0]})")
+        if len(chain) > 1:
+            lines.append(f"- Derived from: {' -> '.join(chain[1:])} (base symbol: {chain[-1]})")
+        for label, name in (
+            ("Description", "Description"),
+            ("Keywords", "ki_keywords"),
+            ("Default footprint", "Footprint"),
+            ("Datasheet", "Datasheet"),
+        ):
+            text = field(name)
+            if text:
+                lines.append(f"- {label}: {text}")
+        pins = symbol_library.symbol_pins(blocks[-1])
+        lines.append(f"- Pins: {len(pins)}")
+        for pin in pins:
+            hidden = ", hidden" if pin["hidden"] else ""
+            lines.append(f"  - {pin['number']} {pin['name']} ({pin['type']}{hidden})")
         return "\n".join(lines)
 
     @mcp.tool()
@@ -1110,15 +1142,27 @@ def register(mcp: FastMCP) -> None:
         cfg = get_config()
         if cfg.project_dir is None:
             return "No active project is configured."
-        content = _read_symbol_file(base_library)
+        content = _library_text(base_library)
         if content is None:
             return f"Symbol library '{base_library}' was not found."
-        start = content.find(f'(symbol "{base_symbol}"')
-        if start == -1:
-            return f"Symbol '{base_library}:{base_symbol}' was not found."
-        base_block, _ = _extract_block(content, start)
+        try:
+            chain = symbol_library.base_chain(content, base_symbol)
+        except KeyError as exc:
+            if exc.args[0] == base_symbol:
+                return f"Symbol '{base_library}:{base_symbol}' was not found."
+            return f"'{base_symbol}' derives from {exc.args[0]!r}, which is missing."
+        # A derived stock symbol holds only properties; graphics and pins are in its base.
+        base_symbol_used = chain[-1]
+        base_block = symbol_library.symbol_block(content, base_symbol_used) or ""
+        inherited: dict[str, str] = {}
+        for link in reversed(chain[:-1]):
+            link_block = symbol_library.symbol_block(content, link) or ""
+            for prop in ("Description", "Datasheet", "ki_keywords", "ki_fp_filters"):
+                found = re.search(rf'\(property\s+"{prop}"\s+"((?:\\.|[^"\\])*)"', link_block)
+                if found and found.group(1):
+                    inherited[prop] = found.group(1)
 
-        wanted = {"Value": value or name}
+        wanted = {**inherited, "Value": value or name}
         for field, text in (
             ("Footprint", footprint),
             ("Datasheet", datasheet),
@@ -1130,14 +1174,17 @@ def register(mcp: FastMCP) -> None:
                 wanted[field] = text
         wanted.update(fields or {})
         try:
-            block = project_library.derive_symbol_block(base_block, base_symbol, name)
+            block = project_library.derive_symbol_block(base_block, base_symbol_used, name)
             block = project_library.set_symbol_fields(block, wanted)
             lib_file = project_library.add_symbol_block(cfg.project_dir, library, name, block)
         except ValueError as exc:
             return f"Part was not created: {exc}"
-        summary = ", ".join(f"{field}={text}" for field, text in wanted.items())
+        summary = ", ".join(
+            f"{field}={text}" for field, text in wanted.items() if not field.startswith("ki_")
+        )
+        via = f", base symbol {base_symbol_used}" if base_symbol_used != base_symbol else ""
         return (
-            f"Part {library}:{name} saved to {lib_file} (from {base_library}:{base_symbol})\n"
+            f"Part {library}:{name} saved to {lib_file} (from {base_library}:{base_symbol}{via})\n"
             f"{summary}\n"
             "If KiCad had the project open before this library existed, reopen the project."
         )

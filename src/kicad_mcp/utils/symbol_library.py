@@ -80,3 +80,63 @@ def read_library_text(path: Path) -> str:
     if path.is_dir():
         return _merged_dir_text(path, path.stat().st_mtime_ns)
     return path.read_text(encoding="utf-8", errors="ignore")
+
+
+_EXTENDS = re.compile(r'\(extends\s+"((?:\\.|[^"\\])*)"')
+_PIN = re.compile(r"\(pin\s+(\w+)\s+(\w+)\s*\(at\s+(-?[\d.]+)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?\)")
+
+
+def symbol_block(library_text: str, name: str) -> str | None:
+    """The ``(symbol "name" ...)`` block of a library text, or None."""
+    from .sexpr import _extract_block
+
+    match = re.search(r'\(symbol\s+"' + re.escape(name) + r'"', library_text)
+    if match is None:
+        return None
+    block, _ = _extract_block(library_text, match.start())
+    return block or None
+
+
+def base_chain(library_text: str, name: str) -> list[str]:
+    """``name`` followed by each symbol it derives from, ending at the base symbol.
+
+    A stock symbol often "extends" another, which may extend a third; only the base
+    holds the graphics and pins. Raises ``KeyError`` when a link is missing.
+    """
+    chain = [name]
+    while True:
+        block = symbol_block(library_text, chain[-1])
+        if block is None:
+            raise KeyError(chain[-1])
+        parent = _EXTENDS.search(block)
+        if parent is None or parent.group(1) in chain:
+            return chain
+        chain.append(parent.group(1))
+
+
+def symbol_pins(block: str) -> list[dict[str, object]]:
+    """Pins of a base symbol block: number, name, type, position and whether hidden."""
+    from .sexpr import _extract_block
+
+    pins: list[dict[str, object]] = []
+    for match in _PIN.finditer(block):
+        pin_block, _ = _extract_block(block, match.start())
+        name = re.search(r'\(name\s+"((?:\\.|[^"\\])*)"', pin_block)
+        number = re.search(r'\(number\s+"((?:\\.|[^"\\])*)"', pin_block)
+        head = pin_block.split("(name", 1)[0]
+        pins.append(
+            {
+                "number": number.group(1) if number else "",
+                "name": name.group(1) if name else "",
+                "type": match.group(1),
+                "x": float(match.group(3)),
+                "y": float(match.group(4)),
+                "hidden": "(hide yes)" in head or re.search(r"\bhide\b", head) is not None,
+            }
+        )
+
+    def order(pin: dict[str, object]) -> tuple[int, int | str]:
+        text = str(pin["number"])
+        return (0, int(text)) if text.isdigit() else (1, text)
+
+    return sorted(pins, key=order)

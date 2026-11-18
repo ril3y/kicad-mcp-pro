@@ -151,6 +151,51 @@ def _format_violations(title: str, entries: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def _item_texts(entry: dict[str, object]) -> list[str]:
+    return [
+        str(item.get("description", ""))
+        for item in cast(list[dict[str, object]], entry.get("items", []))
+    ]
+
+
+def _mentions(entry: dict[str, object], references: set[str]) -> bool:
+    """True when one of the entry's items names one of ``references``."""
+    for text in _item_texts(entry):
+        for reference in references:
+            if re.search(rf"(?:\bof|\bFootprint|\bSymbol)\s+{re.escape(reference)}\b", text):
+                return True
+    return False
+
+
+def _format_grouped(
+    title: str,
+    entries: list[tuple[str, dict[str, object]]],
+    *,
+    max_per_type: int = 6,
+) -> str:
+    """Group ``(where, entry)`` pairs by severity and type, with the items of each."""
+    if not entries:
+        return f"{title}: none"
+    groups: dict[tuple[str, str], list[tuple[str, dict[str, object]]]] = {}
+    for where, entry in entries:
+        key = (str(entry.get("severity", "?")), str(entry.get("type", "unknown")))
+        groups.setdefault(key, []).append((where, entry))
+    rank = {"error": 0, "warning": 1}
+    lines = [f"{title} ({len(entries)} total):"]
+    for (severity, kind), members in sorted(
+        groups.items(), key=lambda item: (rank.get(item[0][0], 2), -len(item[1]), item[0][1])
+    ):
+        description = str(members[0][1].get("description", ""))
+        lines.append(f"- [{severity}] {kind} x{len(members)}: {description}")
+        for where, entry in members[:max_per_type]:
+            items = "; ".join(text for text in _item_texts(entry) if text) or "(no item)"
+            prefix = f"{where}: " if where else ""
+            lines.append(f"    {prefix}{items}")
+        if len(members) > max_per_type:
+            lines.append(f"    ... and {len(members) - max_per_type} more")
+    return "\n".join(lines)
+
+
 def _run_drc_report(report_name: str) -> tuple[Path, dict[str, object] | None, str | None]:
     pcb_file = _get_pcb_file()
     out_file = _ensure_output_dir() / report_name
@@ -1739,8 +1784,22 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def run_drc(save_report: bool = False) -> str:
-        """Run PCB design rule checks."""
+    def run_drc(
+        save_report: bool = False,
+        group: bool = False,
+        references: list[str] | None = None,
+    ) -> str:
+        """Run PCB design rule checks.
+
+        Args:
+            save_report: Also say where the JSON report was written.
+            group: List the results grouped by severity and type, each with the items
+                it concerns, and list the unrouted connections. Without it only a flat
+                list of descriptions is returned.
+            references: Limit the grouped results to violations and unrouted
+                connections that involve these reference designators, e.g. the parts
+                of one block. Implies ``group``.
+        """
         path, report, error = _run_drc_report("drc_report.json")
         if report is None:
             return f"DRC failed: {error or 'unknown error'}"
@@ -1754,7 +1813,23 @@ def register(mcp: FastMCP) -> None:
             f"- Unconnected items: {len(unconnected)}",
             f"- Courtyard issues: {len(courtyard)}",
         ]
-        if violations:
+        if group or references:
+            wanted = {ref.strip() for ref in references or [] if ref.strip()}
+            if wanted:
+                violations = [entry for entry in violations if _mentions(entry, wanted)]
+                unconnected = [entry for entry in unconnected if _mentions(entry, wanted)]
+                lines.append(
+                    f"Limited to {', '.join(sorted(wanted))}: {len(violations)} violation(s), "
+                    f"{len(unconnected)} unrouted connection(s)."
+                )
+            lines.append(_format_grouped("Violations", [("", entry) for entry in violations]))
+            if unconnected:
+                lines.append(f"Unrouted connections ({len(unconnected)}):")
+                for entry in unconnected[:40]:
+                    lines.append("    " + " <-> ".join(_item_texts(entry)))
+                if len(unconnected) > 40:
+                    lines.append(f"    ... and {len(unconnected) - 40} more")
+        elif violations:
             lines.append(_format_violations("Violations", violations))
         if save_report:
             lines.append(f"Saved report: {path}")
@@ -1762,15 +1837,33 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @headless_compatible
-    def run_erc(save_report: bool = False) -> str:
-        """Run schematic electrical rule checks."""
+    def run_erc(save_report: bool = False, group: bool = False) -> str:
+        """Run schematic electrical rule checks.
+
+        Args:
+            save_report: Also say where the JSON report was written.
+            group: List the results grouped by severity and type, each with its sheet
+                and the items it concerns. Without it only a flat list of descriptions
+                is returned.
+        """
         path, report, error = _run_erc_report("erc_report.json")
         if report is None:
             return f"ERC failed: {error or 'unknown error'}"
 
         violations = _erc_violations(report)
         lines = ["ERC summary:", f"- Violations: {len(violations)}"]
-        if violations:
+        if group:
+            located: list[tuple[str, dict[str, object]]] = [
+                ("", entry) for entry in _entries(report, "violations")
+            ]
+            for sheet in cast(list[dict[str, object]], report.get("sheets", [])):
+                where = str(sheet.get("path", ""))
+                located.extend(
+                    (where, entry)
+                    for entry in cast(list[dict[str, object]], sheet.get("violations", []))
+                )
+            lines.append(_format_grouped("Violations", located))
+        elif violations:
             lines.append(_format_violations("Violations", violations))
         if save_report:
             lines.append(f"Saved report: {path}")
