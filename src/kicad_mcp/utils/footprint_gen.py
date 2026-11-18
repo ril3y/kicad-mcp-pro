@@ -135,6 +135,125 @@ def _circle_line(layer: str, cx: float, cy: float, r: float, w: float = 0.1) -> 
 
 
 # ---------------------------------------------------------------------------
+# Footprint from a pad table (irregular packages)
+# ---------------------------------------------------------------------------
+
+
+def _pad_from_table(
+    number: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    layers: str,
+    corner_radius: float = 0.0,
+) -> str:
+    if w <= 0 or h <= 0:
+        raise ValueError(f"Pad {number!r} needs a positive width and height.")
+    shape = "rect"
+    extra = ""
+    if corner_radius > 0:
+        shape = "roundrect"
+        extra = f" (roundrect_rratio {min(corner_radius / min(w, h), 0.5):.4f})"
+    return (
+        f"\t(pad {_sexpr_string(number)} smd {shape} (at {x:.4f} {y:.4f})"
+        f" (size {w:.4f} {h:.4f}) (layers {layers}){extra})"
+    )
+
+
+def generate_footprint_from_pads(
+    name: str,
+    pads: list[dict[str, object]],
+    body_w_mm: float,
+    body_h_mm: float,
+    *,
+    description: str = "",
+    tags: str = "",
+    paste_apertures: list[dict[str, object]] | None = None,
+    courtyard_margin_mm: float = 0.25,
+) -> str:
+    """Generate a surface-mount footprint from explicit pad rectangles.
+
+    For packages whose land pattern is not a regular row or grid (TI VQFN-HR and
+    similar). Coordinates are in mm from the package centre, seen from the top of
+    the board, x to the right and y **down** (KiCad's board axes).
+
+    Each pad dict has ``number``, ``x_mm``, ``y_mm``, ``w_mm``, ``h_mm`` and optionally
+    ``corner_radius_mm`` and ``paste`` (default true). Several rectangles may share a
+    number; overlapping rectangles with one number form one L- or T-shaped land.
+    ``paste_apertures`` are extra stencil openings (``x_mm``, ``y_mm``, ``w_mm``,
+    ``h_mm``) for lands whose paste pattern differs from the copper; give those lands
+    ``paste: false``.
+    """
+    if not pads:
+        raise ValueError("At least one pad is required.")
+    if body_w_mm <= 0 or body_h_mm <= 0:
+        raise ValueError("The body width and height must be positive.")
+
+    def number_of(raw: dict[str, object], key: str) -> float:
+        try:
+            return float(raw[key])  # type: ignore[arg-type]
+        except KeyError as exc:
+            raise ValueError(f"A pad is missing {key!r}: {raw}") from exc
+
+    pad_lines: list[str] = []
+    min_x, max_x = -body_w_mm / 2, body_w_mm / 2
+    min_y, max_y = -body_h_mm / 2, body_h_mm / 2
+    first: tuple[float, float, float] | None = None
+    for raw in pads:
+        if "number" not in raw:
+            raise ValueError(f"A pad is missing 'number': {raw}")
+        x, y = number_of(raw, "x_mm"), number_of(raw, "y_mm")
+        w, h = number_of(raw, "w_mm"), number_of(raw, "h_mm")
+        layers = f"{_LAYER_CU} {_LAYER_MASK}"
+        if raw.get("paste", True):
+            layers += f" {_LAYER_PASTE}"
+        radius = float(raw.get("corner_radius_mm", 0.0))  # type: ignore[arg-type]
+        pad_lines.append(_pad_from_table(str(raw["number"]), x, y, w, h, layers, radius))
+        min_x, max_x = min(min_x, x - w / 2), max(max_x, x + w / 2)
+        min_y, max_y = min(min_y, y - h / 2), max(max_y, y + h / 2)
+        if first is None:
+            first = (x, y, w)
+    for raw in paste_apertures or []:
+        pad_lines.append(
+            _pad_from_table(
+                "",
+                number_of(raw, "x_mm"),
+                number_of(raw, "y_mm"),
+                number_of(raw, "w_mm"),
+                number_of(raw, "h_mm"),
+                _LAYER_PASTE,
+                float(raw.get("corner_radius_mm", 0.0)),  # type: ignore[arg-type]
+            )
+        )
+
+    def outward(value: float) -> float:
+        # Courtyard on the 0.01 mm grid, never smaller than asked.
+        return math.copysign(math.ceil(abs(value) * 100 - 1e-9) / 100, value)
+
+    cy_x1, cy_x2 = outward(min_x - courtyard_margin_mm), outward(max_x + courtyard_margin_mm)
+    cy_y1, cy_y2 = outward(min_y - courtyard_margin_mm), outward(max_y + courtyard_margin_mm)
+
+    lines = _fp_header(name, description or name, tags or "smd")
+    lines += _ref_value(cy_y1 - 0.8, cy_y2 + 0.8)
+    # Reference on the fab layer, sized to stay inside a small body.
+    fab_size = max(0.25, min(1.0, body_w_mm / 4))
+    lines.append(
+        f'\t(fp_text user "${{REFERENCE}}" (at 0 0) (layer {_LAYER_FAB})'
+        f" (effects (font (size {fab_size:.2f} {fab_size:.2f}) (thickness {fab_size * 0.15:.3f}))))"
+    )
+    lines += pad_lines
+    lines += _rect_line(_LAYER_FAB, -body_w_mm / 2, -body_h_mm / 2, body_w_mm / 2, body_h_mm / 2)
+    lines += _rect_line(_LAYER_CYARD, cy_x1, cy_y1, cy_x2, cy_y2, 0.05)
+    if first is not None:
+        # Pin 1 mark: a silkscreen dot outside the courtyard, on the side nearest the first pad.
+        dot_x = (cy_x1 - 0.2) if first[0] <= 0 else (cy_x2 + 0.2)
+        lines.append(_circle_line(_LAYER_SILK, dot_x, first[1], 0.1, 0.2))
+    lines.append(")")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Chip passives (0201 … 2512)
 # ---------------------------------------------------------------------------
 

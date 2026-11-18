@@ -971,8 +971,15 @@ def register(mcp: FastMCP) -> None:
         datasheet: str = "",
         footprint_hint: str = "",
         output_path: str = "",
+        library: str = "",
     ) -> str:
         """Generate a KiCad symbol (.kicad_sym) from a pin table and save it.
+
+        Pass ``library`` to make the symbol placeable: it is then added to the project
+        library ``<project>/libs/<library>.kicad_sym`` (replacing an older symbol of the
+        same name) and the library is listed in the project's ``sym-lib-table``, so
+        ``sch_add_symbol(library, name, ...)`` finds it. KiCad reads that table when it
+        opens the project; reopen the project after the first symbol of a new library.
 
         Each pin dict must contain:
             ``number`` (str | int), ``name`` (str).
@@ -988,11 +995,13 @@ def register(mcp: FastMCP) -> None:
             datasheet: Datasheet URL or path.
             footprint_hint: Default footprint (e.g. "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm").
             output_path: Optional relative path inside output_dir. Defaults to
-                ``symbols/<name>.kicad_sym``.
+                ``symbols/<name>.kicad_sym``. Ignored when ``library`` is given.
+            library: Project library name to add the symbol to (letters, digits, . _ + -).
 
         Returns:
             Confirmation with the saved file path, or an error message.
         """
+        from ..utils import project_library
         from ..utils.symbol_gen import PinSpec, generate_symbol
 
         pin_specs: list[PinSpec] = []
@@ -1023,6 +1032,19 @@ def register(mcp: FastMCP) -> None:
             return f"Symbol generation failed: {exc}"
 
         cfg = get_config()
+        if library:
+            if cfg.project_dir is None:
+                return "No active project is configured."
+            try:
+                lib_file = project_library.add_symbol(cfg.project_dir, library, name, sexpr)
+            except ValueError as exc:
+                return f"Symbol was not saved: {exc}"
+            return (
+                f"Symbol {library}:{name} saved to {lib_file}\n"
+                f"Pins: {len(pin_specs)}, Ref prefix: {reference_prefix}\n"
+                "The library is listed in the project sym-lib-table. If KiCad already had "
+                "the project open before this library existed, reopen the project."
+            )
         if output_path:
             out_file = cfg.resolve_within_project(output_path)
         else:
@@ -1036,6 +1058,77 @@ def register(mcp: FastMCP) -> None:
         return (
             f"Symbol saved to {out_file}\n"
             f"Name: {name}, Pins: {len(pin_specs)}, Ref prefix: {reference_prefix}"
+        )
+
+    @mcp.tool()
+    @headless_compatible
+    def lib_generate_footprint_from_pads(
+        name: str,
+        pads: list[dict[str, Any]],
+        body_w_mm: float,
+        body_h_mm: float,
+        library: str,
+        description: str = "",
+        tags: str = "",
+        paste_apertures: list[dict[str, Any]] | None = None,
+        courtyard_margin_mm: float = 0.25,
+    ) -> str:
+        """Create a surface-mount footprint from a table of pad rectangles.
+
+        For packages whose land pattern is not a regular row or grid, such as TI's
+        VQFN-HR. Take the numbers from the datasheet's land pattern drawing.
+
+        Coordinates are in mm from the package centre, seen from the top of the board,
+        x to the right and y DOWN. A datasheet drawing that shows pin 1 at the top left
+        with y up needs its y values negated.
+
+        Args:
+            name: Footprint name (letters, digits, . _ + -).
+            pads: One dict per rectangle: ``number``, ``x_mm``, ``y_mm`` (centre),
+                ``w_mm``, ``h_mm``; optional ``corner_radius_mm`` and ``paste`` (default
+                true). Rectangles that share a number and overlap form one L- or
+                T-shaped land. List pin 1 first: the pin 1 mark goes beside it.
+            body_w_mm: Package body size along x.
+            body_h_mm: Package body size along y.
+            library: Project footprint library. The footprint is written to
+                ``<project>/libs/<library>.pretty/<name>.kicad_mod`` and the library is
+                listed in the project's ``fp-lib-table``; use it as ``library:name``.
+            description: Text for the footprint description; cite the datasheet page.
+            tags: Search keywords.
+            paste_apertures: Extra stencil openings (``x_mm``, ``y_mm``, ``w_mm``,
+                ``h_mm``) for lands whose paste pattern differs from the copper. Give
+                those lands ``paste: false``.
+            courtyard_margin_mm: Clearance from pads and body to the courtyard.
+
+        Returns:
+            The saved path and a summary, or an error message.
+        """
+        from ..utils import project_library
+        from ..utils.footprint_gen import generate_footprint_from_pads
+
+        cfg = get_config()
+        if cfg.project_dir is None:
+            return "No active project is configured."
+        try:
+            sexpr = generate_footprint_from_pads(
+                name,
+                pads,
+                body_w_mm,
+                body_h_mm,
+                description=description,
+                tags=tags,
+                paste_apertures=paste_apertures,
+                courtyard_margin_mm=courtyard_margin_mm,
+            )
+            fp_file = project_library.add_footprint(cfg.project_dir, library, name, sexpr)
+        except (ValueError, TypeError) as exc:
+            return f"Footprint generation failed: {exc}"
+        numbers = sorted({str(pad["number"]) for pad in pads}, key=lambda n: (len(n), n))
+        return (
+            f"Footprint {library}:{name} saved to {fp_file}\n"
+            f"Pad numbers: {', '.join(numbers)} ({len(pads)} rectangles, "
+            f"{len(paste_apertures or [])} extra paste openings)\n"
+            "The library is listed in the project fp-lib-table."
         )
 
     @mcp.tool()

@@ -51,7 +51,7 @@ def symbol_files(path: Path) -> list[Path]:
     return [path]
 
 
-def _symbol_blocks_of(text: str) -> str:
+def symbol_blocks_of(text: str) -> str:
     """Strip the ``(kicad_symbol_lib ...)`` wrapper, leaving the symbol blocks."""
     match = _FIRST_SYMBOL.search(text)
     if match is None:
@@ -66,7 +66,7 @@ def _merged_dir_text(path: Path, stamp: int) -> str:
     parts = ["(kicad_symbol_lib"]
     for child in symbol_files(path):
         try:
-            blocks = _symbol_blocks_of(child.read_text(encoding="utf-8", errors="ignore"))
+            blocks = symbol_blocks_of(child.read_text(encoding="utf-8", errors="ignore"))
         except OSError:
             continue
         if blocks:

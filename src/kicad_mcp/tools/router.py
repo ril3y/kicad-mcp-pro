@@ -231,6 +231,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "ds_page_image",
             # v2.2.0 — generative library tools
             "lib_generate_footprint_ipc7351",
+            "lib_generate_footprint_from_pads",
             "lib_generate_symbol_from_pintable",
             "lib_recommend_part",
             "lib_bind_part_to_symbol",

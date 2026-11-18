@@ -361,3 +361,55 @@ async def test_library_live_component_edge_cases(
     assert "Footprint hint" not in no_auto_footprint
     assert "Could not update schematic properties" in update_failed
     assert ("U2", "LCSC", "C999") in updates
+
+
+@pytest.mark.anyio
+async def test_project_library_tools_make_parts_kicad_can_find(sample_project: Path) -> None:
+    server = build_server("full")
+
+    footprint = await call_tool_text(
+        server,
+        "lib_generate_footprint_from_pads",
+        {
+            "name": "ODD-2",
+            "pads": [
+                {"number": 1, "x_mm": -0.8, "y_mm": -0.7, "w_mm": 0.75, "h_mm": 0.225},
+                {"number": 1, "x_mm": -0.65, "y_mm": -0.9, "w_mm": 0.4, "h_mm": 0.575},
+                {"number": 2, "x_mm": 0.9, "y_mm": 0.25, "w_mm": 0.6, "h_mm": 0.25},
+            ],
+            "body_w_mm": 2.0,
+            "body_h_mm": 2.0,
+            "library": "Parts",
+        },
+    )
+    bad_footprint = await call_tool_text(
+        server,
+        "lib_generate_footprint_from_pads",
+        {
+            "name": "BAD",
+            "pads": [{"number": 1, "x_mm": 0, "y_mm": 0}],
+            "body_w_mm": 2.0,
+            "body_h_mm": 2.0,
+            "library": "Parts",
+        },
+    )
+    symbol = await call_tool_text(
+        server,
+        "lib_generate_symbol_from_pintable",
+        {
+            "name": "ODD",
+            "pins": [{"number": "1", "name": "IN"}, {"number": "2", "name": "OUT"}],
+            "footprint_hint": "Parts:ODD-2",
+            "library": "Parts",
+        },
+    )
+
+    assert "Footprint Parts:ODD-2 saved" in footprint
+    assert "Pad numbers: 1, 2 (3 rectangles" in footprint
+    assert "Footprint generation failed" in bad_footprint
+    assert "Symbol Parts:ODD saved" in symbol
+    assert (sample_project / "libs" / "Parts.pretty" / "ODD-2.kicad_mod").exists()
+    assert not (sample_project / "libs" / "Parts.pretty" / "BAD.kicad_mod").exists()
+    assert '(symbol "ODD"' in (sample_project / "libs" / "Parts.kicad_sym").read_text("utf-8")
+    assert '(name "Parts")' in (sample_project / "sym-lib-table").read_text("utf-8")
+    assert '(name "Parts")' in (sample_project / "fp-lib-table").read_text("utf-8")
