@@ -3687,6 +3687,79 @@ def register(mcp: FastMCP) -> None:
         return f"Deleted {', '.join(sorted(found))}.{tail} {hint}"
 
     @mcp.tool()
+    def pcb_route_track(
+        start: str,
+        end: str,
+        layer: str = "F_Cu",
+        waypoints: list[dict[str, Any]] | None = None,
+        shove: bool = False,
+        width_mm: float = 0.0,
+    ) -> str:
+        """Route one track with KiCad's own interactive (push-and-shove) router.
+
+        The router obeys the board's rules and goes around, or pushes aside, what
+        is in the way, as it does under the mouse. Needs a KiCad build that serves
+        the RouteTrack API command. Nothing is saved until pcb_save().
+
+        Args:
+            start: Where the track begins: a pad as "R24.1" (reference, dot, pad
+                number) or a point as "104.6,85.5" in mm. It must lie on a pad, via
+                or track; the new track takes that item's net.
+            end: Where it ends, in the same forms.
+            layer: Copper layer to start on, e.g. "F_Cu", "In2_Cu", "B_Cu".
+            waypoints: Points to pass through in order, each ``{"x", "y"}`` in mm
+                with an optional ``"layer"``: a different layer there places a via
+                and the track continues on that layer.
+            shove: Push other nets' tracks and vias aside where the rules allow.
+                Off, the router only goes around them.
+            width_mm: Track width; 0 uses the width the board's rules give the net.
+        """
+        hint = _PERSISTENCE_HINT
+        from ..ipc.route import route_track
+
+        def point(text: str) -> tuple[float, float]:
+            text = text.strip()
+            if "," in text:
+                x_text, y_text = text.split(",", 1)
+                return float(x_text), float(y_text)
+            reference, _, number = text.partition(".")
+            for pad, pad_reference in _iter_board_pads_with_refs():
+                if pad_reference == reference and str(pad.number) == number:
+                    return (
+                        nm_to_mm(_coord_nm(pad.position, "x")),
+                        nm_to_mm(_coord_nm(pad.position, "y")),
+                    )
+            raise ValueError(f"pad {text!r} was not found on the board")
+
+        try:
+            first, last = point(start), point(end)
+            done = route_track(
+                first, last, layer, waypoints=waypoints, shove=shove, width_mm=width_mm
+            )
+        except Exception as exc:  # noqa: BLE001 - surface the router's own message
+            return f"Not routed: {exc}"
+        lines = [
+            f"Routed {start} to {end}: {len(done['tracks'])} track piece(s), "
+            f"{len(done['vias'])} via(s); "
+            + (
+                "reached the end item."
+                if done["reached_end"]
+                else "did NOT reach an item at the end."
+            )
+        ]
+        for track in done["tracks"][:12]:
+            lines.append(
+                f"  {track['layer']} {track['width']:.2f} mm: "
+                f"({track['x1']:.3f}, {track['y1']:.3f}) -> ({track['x2']:.3f}, {track['y2']:.3f})"
+            )
+        if len(done["tracks"]) > 12:
+            lines.append(f"  ... and {len(done['tracks']) - 12} more")
+        for via in done["vias"]:
+            lines.append(f"  via at ({via['x']:.3f}, {via['y']:.3f})")
+        lines.append(hint)
+        return "\n".join(lines)
+
+    @mcp.tool()
     def pcb_import_routes(ses_path: str = "output/routing/board.ses") -> str:
         """Bring an autorouter's result (Specctra .ses) onto the board as tracks and vias.
 

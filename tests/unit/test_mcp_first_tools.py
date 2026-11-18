@@ -363,3 +363,48 @@ def test_parse_ses_gives_tracks_and_vias_in_board_millimetres() -> None:
     assert (tracks[1]["x2"], tracks[1]["y2"]) == (106.0, 87.0)
     assert tracks[2]["net"] == "GND" and tracks[2]["width"] == 0.5
     assert vias == [{"net": "/LED_EN", "x": 106.0, "y": 87.0, "diameter": 0.6, "drill": 0.3}]
+
+
+def test_route_track_request_carries_points_layers_and_mode() -> None:
+    """pcb_route_track: the request built for KiCad's RouteTrack command."""
+    from kicad_mcp._master_proto.mp.board import board_types_pb2 as board_types
+    from kicad_mcp._master_proto.mp.common.commands.editor_commands_pb2 import (
+        GetOpenDocumentsResponse,
+    )
+    from kicad_mcp.ipc import route
+
+    sent: list[object] = []
+
+    class Client:
+        def send(self, command: object, response_cls: type) -> object:
+            if type(command).__name__ == "GetOpenDocuments":
+                reply = GetOpenDocumentsResponse()
+                reply.documents.add().board_filename = "a.kicad_pcb"
+                return reply
+            sent.append(command)
+            reply = response_cls()
+            track = board_types.Track()
+            track.start.x_nm, track.end.x_nm = 1_000_000, 3_000_000
+            track.layer = board_types.BoardLayer.Value("BL_F_Cu")
+            track.width.value_nm = 200_000
+            reply.items.add().Pack(track)
+            reply.reached_end = True
+            return reply
+
+    done = route.route_track(
+        (104.6, 85.5),
+        (110.5, 84.0),
+        "F_Cu",
+        waypoints=[{"x": 106, "y": 85}, {"x": 108, "y": 84, "layer": "B.Cu"}],
+        shove=True,
+        width_mm=0.5,
+        client=Client(),  # type: ignore[arg-type]
+    )
+
+    request = sent[0]
+    assert type(request).DESCRIPTOR.full_name == "kiapi.board.commands.RouteTrack"
+    assert (request.start.x_nm, request.end.y_nm) == (104_600_000, 84_000_000)  # type: ignore[attr-defined]
+    assert request.mode == 2 and request.width.value_nm == 500_000  # type: ignore[attr-defined]
+    assert not request.waypoints[0].HasField("layer")  # type: ignore[attr-defined]
+    assert request.waypoints[1].layer == board_types.BoardLayer.Value("BL_B_Cu")  # type: ignore[attr-defined]
+    assert done["reached_end"] and done["tracks"][0]["x2"] == 3.0 and done["vias"] == []
