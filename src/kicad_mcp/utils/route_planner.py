@@ -260,3 +260,38 @@ def circle_penalty(
                 if distance < radius:
                     penalty[grid.index(column, row)] += cost * (1 - distance / radius)
     return penalty
+
+
+def reach(grid: Grid, start: Cell, limit: int = 200_000) -> tuple[int, set[int]]:
+    """How many cells a track from ``start`` can reach without crossing anything.
+
+    Counts cells over all layers the grid allows, changing layer only at free via
+    sites. Returns the count and the layers touched. Used to say why no path was
+    found: a start that reaches only a few cells is fenced in where it stands.
+    """
+    layers = len(grid.blocked)
+    costs = grid.layer_cost or [1.0] * layers
+    size = grid.columns * grid.rows
+    seen = {start}
+    todo = [start]
+    while todo and len(seen) < limit:
+        layer, column, row = todo.pop()
+        options = []
+        for dc, dr, _ in _MOVES:
+            next_column, next_row = column + dc, row + dr
+            if grid.inside(next_column, next_row):
+                options.append((layer, next_column, next_row))
+        cell = grid.index(column, row)
+        if grid.via_blocked and not grid.via_blocked[cell]:
+            options.extend(
+                (other, column, row)
+                for other in range(layers)
+                if other != layer and costs[other] > 0
+            )
+        for here in options:
+            if here in seen or grid.blocked[here[0]][grid.index(here[1], here[2])]:
+                continue
+            seen.add(here)
+            todo.append(here)
+    del size
+    return len(seen), {layer for layer, _, _ in seen}
