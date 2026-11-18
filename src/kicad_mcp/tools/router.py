@@ -134,6 +134,8 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_set_net_class",
             "pcb_move_footprint",
             "pcb_apply_placement_spec",
+            "pcb_move_block",
+            "pcb_delete_block_copper",
             "pcb_set_footprint_layer",
             "pcb_set_footprint_attributes",
             "pcb_sync_from_schematic",

@@ -3953,6 +3953,106 @@ def register(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
+    def pcb_move_block(
+        x1_mm: float,
+        y1_mm: float,
+        x2_mm: float,
+        y2_mm: float,
+        dx_mm: float,
+        dy_mm: float,
+    ) -> str:
+        """Move a finished block of layout as one piece: parts, tracks, vias and zones.
+
+        Everything that lies wholly inside the rectangle (x1, y1)-(x2, y2) is shifted
+        by (dx, dy): footprints by their position, tracks by both ends, vias by their
+        position, zones by their whole outline. Use it to carry a placed and routed
+        block to another part of the board without redoing it. Refill the zones
+        afterwards (pcb_refill_zones). Nothing is saved until pcb_save().
+        """
+        left, right = sorted((x1_mm, x2_mm))
+        top, bottom = sorted((y1_mm, y2_mm))
+
+        def inside(point: Any) -> bool:  # noqa: ANN401 - kipy Vector2
+            x, y = nm_to_mm(point.x), nm_to_mm(point.y)
+            return left <= x <= right and top <= y <= bottom
+
+        delta = Vector2.from_xy_mm(dx_mm, dy_mm)
+
+        def shifted(point: Any) -> Vector2:  # noqa: ANN401
+            return Vector2.from_xy(point.x + delta.x, point.y + delta.y)
+
+        board = get_board()
+        moved: list[Any] = []
+        counts = {"footprints": 0, "tracks": 0, "vias": 0, "zones": 0}
+        for footprint in cast(Iterable[Any], board.get_footprints()):
+            if inside(footprint.position):
+                footprint.position = shifted(footprint.position)
+                moved.append(footprint)
+                counts["footprints"] += 1
+        for track in cast(Iterable[Any], board.get_tracks()):
+            if inside(track.start) and inside(track.end):
+                track.start = shifted(track.start)
+                track.end = shifted(track.end)
+                moved.append(track)
+                counts["tracks"] += 1
+        for via in cast(Iterable[Any], board.get_vias()):
+            if inside(via.position):
+                via.position = shifted(via.position)
+                moved.append(via)
+                counts["vias"] += 1
+        for zone in cast(Iterable[Any], board.get_zones()):
+            box = zone.bounding_box()
+            corner = Vector2.from_xy(box.pos.x + box.size.x, box.pos.y + box.size.y)
+            if inside(box.pos) and inside(corner):
+                zone.move(delta)
+                moved.append(zone)
+                counts["zones"] += 1
+        if not moved:
+            return "Nothing lies wholly inside that rectangle; nothing moved."
+        with board_transaction() as live:
+            live.update_items(cast(list[BoardItem], moved))
+        summary = ", ".join(f"{count} {kind}" for kind, count in counts.items())
+        return f"Moved {summary} by ({dx_mm}, {dy_mm}) mm. {_PERSISTENCE_HINT}"
+
+    @mcp.tool()
+    def pcb_delete_block_copper(x1_mm: float, y1_mm: float, x2_mm: float, y2_mm: float) -> str:
+        """Delete the routing of a block: tracks, vias and zones wholly inside a rectangle.
+
+        Footprints are kept. Use it before laying a block out again somewhere else.
+        Nothing is saved until pcb_save().
+        """
+        left, right = sorted((x1_mm, x2_mm))
+        top, bottom = sorted((y1_mm, y2_mm))
+
+        def inside(point: Any) -> bool:  # noqa: ANN401 - kipy Vector2
+            x, y = nm_to_mm(point.x), nm_to_mm(point.y)
+            return left <= x <= right and top <= y <= bottom
+
+        board = get_board()
+        doomed: list[Any] = []
+        counts = {"tracks": 0, "vias": 0, "zones": 0}
+        for track in cast(Iterable[Any], board.get_tracks()):
+            if inside(track.start) and inside(track.end):
+                doomed.append(track.id)
+                counts["tracks"] += 1
+        for via in cast(Iterable[Any], board.get_vias()):
+            if inside(via.position):
+                doomed.append(via.id)
+                counts["vias"] += 1
+        for zone in cast(Iterable[Any], board.get_zones()):
+            box = zone.bounding_box()
+            corner = Vector2.from_xy(box.pos.x + box.size.x, box.pos.y + box.size.y)
+            if inside(box.pos) and inside(corner):
+                doomed.append(zone.id)
+                counts["zones"] += 1
+        if not doomed:
+            return "No tracks, vias or zones lie wholly inside that rectangle."
+        with board_transaction() as live:
+            live.remove_items_by_id(doomed)
+        summary = ", ".join(f"{count} {kind}" for kind, count in counts.items())
+        return f"Deleted {summary}. {_PERSISTENCE_HINT}"
+
+    @mcp.tool()
     @requires_kicad_running
     def pcb_set_footprint_layer(reference: str, layer: str) -> str:
         """Set the footprint copper side."""

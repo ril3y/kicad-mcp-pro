@@ -226,3 +226,71 @@ async def test_lib_set_pin_types_sets_many_and_refuses_bad_input(
         symbol_library.symbol_block(library.read_text(encoding="utf-8"), "BASE") or ""
     )
     assert [(pin["number"], pin["type"]) for pin in pins] == [("4", "output"), ("8", "power_in")]
+
+
+class _Point:
+    def __init__(self, x_mm: float, y_mm: float) -> None:
+        self.x, self.y = int(x_mm * 1e6), int(y_mm * 1e6)
+
+
+class _Thing:
+    def __init__(self, ident: str, *points: tuple[float, float]) -> None:
+        self.id = ident
+        self.start = self.position = _Point(*points[0])
+        self.end = _Point(*points[-1])
+
+
+@pytest.mark.anyio
+async def test_block_tools_take_only_what_lies_inside(
+    sample_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pcb_move_block and pcb_delete_block_copper act on a rectangle of layout."""
+    from contextlib import contextmanager
+
+    from kicad_mcp.tools import pcb
+
+    class Board:
+        def __init__(self) -> None:
+            self.updated: list[object] = []
+            self.removed: list[object] = []
+            self.footprints = [_Thing("fp-in", (60, 60)), _Thing("fp-out", (110, 80))]
+            self.tracks = [_Thing("t-in", (56, 56), (62, 56)), _Thing("t-half", (62, 56), (90, 56))]
+            self.vias = [_Thing("v-in", (58, 58))]
+
+        def get_footprints(self) -> list[_Thing]:
+            return self.footprints
+
+        def get_tracks(self) -> list[_Thing]:
+            return self.tracks
+
+        def get_vias(self) -> list[_Thing]:
+            return self.vias
+
+        def get_zones(self) -> list[_Thing]:
+            return []
+
+        def update_items(self, items: list[object]) -> None:
+            self.updated = list(items)
+
+        def remove_items_by_id(self, ids: list[object]) -> None:
+            self.removed = list(ids)
+
+    board = Board()
+
+    @contextmanager
+    def transaction():  # noqa: ANN202
+        yield board
+
+    monkeypatch.setattr(pcb, "get_board", lambda: board)
+    monkeypatch.setattr(pcb, "board_transaction", transaction)
+    server = build_server("full")
+    box = {"x1_mm": 54, "y1_mm": 54, "x2_mm": 72, "y2_mm": 71}
+
+    moved = await call_tool_text(server, "pcb_move_block", {**box, "dx_mm": 50, "dy_mm": 40})
+    assert "Moved 1 footprints, 1 tracks, 1 vias, 0 zones" in moved
+    assert {item.id for item in board.updated} == {"fp-in", "t-in", "v-in"}
+
+    box = {"x1_mm": 104, "y1_mm": 94, "x2_mm": 122, "y2_mm": 111}
+    deleted = await call_tool_text(server, "pcb_delete_block_copper", box)
+    assert "Deleted 1 tracks, 1 vias, 0 zones" in deleted
+    assert set(board.removed) == {"t-in", "v-in"}
