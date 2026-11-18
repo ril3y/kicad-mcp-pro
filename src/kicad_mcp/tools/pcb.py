@@ -3668,6 +3668,52 @@ def register(mcp: FastMCP) -> None:
         return f"{head}\n{report.strip()}{tail}"
 
     @mcp.tool()
+    def pcb_tidy_text(
+        show_values: bool = False,
+        reference_size_mm: float = 0.8,
+        reference_thickness_mm: float = 0.15,
+        references: list[str] | None = None,
+    ) -> str:
+        """Make footprint text readable: hide the values and shrink the references.
+
+        Library footprints arrive with 1 mm reference and value text, which on small
+        parts placed close together piles up into an unreadable layer. This applies
+        one rule to every footprint (or to the listed ones): the value text is hidden
+        (it stays in the footprint and the BOM), and the reference text is set to one
+        size. Run it after pcb_import_netlist. Nothing is saved until pcb_save().
+
+        Args:
+            show_values: Keep the value text visible.
+            reference_size_mm: Height and width of the reference text. 0.8 mm with a
+                0.15 mm line is about the smallest JLCPCB prints legibly.
+            reference_thickness_mm: Line width of the reference text.
+            references: Limit the change to these reference designators.
+        """
+        if not 0.3 <= reference_size_mm <= 5 or not 0.05 <= reference_thickness_mm <= 1:
+            return "reference_size_mm must be 0.3-5 and reference_thickness_mm 0.05-1."
+        wanted = {ref.strip() for ref in references} if references else None
+        changed: list[BoardItem] = []
+        for footprint in cast(Iterable[_FootprintLike], get_board().get_footprints()):
+            reference_field = footprint.reference_field
+            if wanted is not None and reference_field.text.value not in wanted:
+                continue
+            value_field = cast(Any, footprint).value_field
+            value_field.visible = show_values
+            attributes = reference_field.text.attributes
+            attributes.size = Vector2.from_xy_mm(reference_size_mm, reference_size_mm)
+            attributes.stroke_width = int(round(reference_thickness_mm * 1_000_000))
+            changed.append(cast(BoardItem, footprint))
+        if not changed:
+            return "No footprints matched."
+        with board_transaction() as board:
+            board.update_items(changed)
+        return (
+            f"Tidied text on {len(changed)} footprint(s): values "
+            f"{'shown' if show_values else 'hidden'}, references {reference_size_mm:g} mm "
+            f"with a {reference_thickness_mm:g} mm line. {_PERSISTENCE_HINT}"
+        )
+
+    @mcp.tool()
     def pcb_save() -> str:
         """Save the active board."""
         save = cast(Callable[[], None], get_board().save)

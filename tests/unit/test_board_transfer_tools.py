@@ -113,3 +113,52 @@ async def test_pcb_board_image_refuses_a_region_off_the_sheet(
 
     outside = await call_tool_text(server, "pcb_board_image", {"region": "900,900,950,950"})
     assert "outside the" in outside
+
+
+@pytest.mark.anyio
+async def test_pcb_tidy_text_hides_values_and_sizes_references(
+    sample_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Attributes:
+        size: Any = None
+        stroke_width = 0
+
+    class Text:
+        def __init__(self, value: str) -> None:
+            self.value = value
+            self.attributes = Attributes()
+
+    class Field:
+        def __init__(self, value: str) -> None:
+            self.text = Text(value)
+            self.visible = True
+
+    class Footprint:
+        def __init__(self, ref: str) -> None:
+            self.reference_field = Field(ref)
+            self.value_field = Field("10k")
+
+    class Board:
+        def __init__(self) -> None:
+            self.footprints = [Footprint("R1"), Footprint("C1")]
+            self.updated: list[Any] = []
+
+        def get_footprints(self) -> list[Footprint]:
+            return self.footprints
+
+        def update_items(self, items: list[Any]) -> None:
+            self.updated = items
+
+    board = Board()
+    monkeypatch.setattr("kicad_mcp.tools.pcb.get_board", lambda: board)
+    monkeypatch.setattr("kicad_mcp.connection.get_board", lambda: board)
+    server = build_server("full")
+
+    result = await call_tool_text(server, "pcb_tidy_text", {"references": ["R1"]})
+
+    assert "Tidied text on 1 footprint(s): values hidden, references 0.8 mm" in result
+    assert board.footprints[0].value_field.visible is False
+    assert board.footprints[0].reference_field.text.attributes.stroke_width == 150_000
+    assert board.footprints[1].value_field.visible is True
+    assert len(board.updated) == 1
+    assert "must be" in await call_tool_text(server, "pcb_tidy_text", {"reference_size_mm": 0.1})
