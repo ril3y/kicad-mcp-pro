@@ -19,7 +19,7 @@ _PACKAGE = "kiapi.board.commands"
 @lru_cache(maxsize=1)
 def messages() -> tuple[Any, Any]:
     """Return the ``RouteTrack`` and ``RouteTrackResponse`` message classes."""
-    from google.protobuf import descriptor_pb2, message_factory
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
     from kicad_mcp._master_proto._pool import shared_pool
     from kicad_mcp._master_proto.mp.board import board_types_pb2  # noqa: F401 - registers deps
@@ -87,13 +87,26 @@ def messages() -> tuple[Any, Any]:
         name="reached_end", number=3, type=field.TYPE_BOOL, label=field.LABEL_OPTIONAL
     )
 
-    shared_pool.AddSerializedFile(file.SerializeToString())
+    # A pool of its own: the shared pool outlives a code reload and would refuse a
+    # second, changed copy of these messages.
+    pool = descriptor_pool.DescriptorPool()
+    added: set[str] = set()
+
+    def copy(descriptor: Any) -> None:  # noqa: ANN401 - FileDescriptor
+        if descriptor.name in added:
+            return
+        for dependency in descriptor.dependencies:
+            copy(dependency)
+        pool.AddSerializedFile(descriptor.serialized_pb)
+        added.add(descriptor.name)
+
+    for name in file.dependency:
+        copy(shared_pool.FindFileByName(name))
+    pool.AddSerializedFile(file.SerializeToString())
     return (
+        message_factory.GetMessageClass(pool.FindMessageTypeByName(f"{_PACKAGE}.RouteTrack")),
         message_factory.GetMessageClass(
-            shared_pool.FindMessageTypeByName(f"{_PACKAGE}.RouteTrack")
-        ),
-        message_factory.GetMessageClass(
-            shared_pool.FindMessageTypeByName(f"{_PACKAGE}.RouteTrackResponse")
+            pool.FindMessageTypeByName(f"{_PACKAGE}.RouteTrackResponse")
         ),
     )
 
@@ -131,7 +144,8 @@ def route_track(
     request_cls, response_cls = messages()
     client = client or MasterKiCadClient()
     request = request_cls()
-    request.header.document.CopyFrom(_board_document(client))
+    # The document comes from the shared pool's classes; go through bytes.
+    request.header.document.MergeFromString(_board_document(client).SerializeToString())
     request.start.x_nm, request.start.y_nm = _nm(start[0]), _nm(start[1])
     request.end.x_nm, request.end.y_nm = _nm(end[0]), _nm(end[1])
     request.layer = layer_value(layer)
