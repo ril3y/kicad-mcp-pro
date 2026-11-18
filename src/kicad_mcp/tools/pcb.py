@@ -3598,6 +3598,7 @@ def register(mcp: FastMCP) -> None:
         dry_run: bool = False,
         delete_extra_footprints: bool = False,
         update_footprints: bool = True,
+        full_report: bool = False,
     ) -> str:
         """Bring the schematic into the open board with KiCad's own netlist import.
 
@@ -3613,6 +3614,9 @@ def register(mcp: FastMCP) -> None:
             delete_extra_footprints: Remove board footprints that are no longer in the
                 schematic.
             update_footprints: Replace board footprints whose assigned footprint changed.
+            full_report: Return every line of KiCad's report. By default only the
+                lines about added or removed footprints, problems and missing nets
+                are returned, since the full report runs to a dozen lines per part.
 
         Returns:
             KiCad's import report with error, warning and new-footprint counts.
@@ -3665,7 +3669,17 @@ def register(mcp: FastMCP) -> None:
             f"{errors} error(s), {warnings} warning(s)."
         )
         tail = "" if dry_run else "\nCall pcb_save() to keep the result."
-        return f"{head}\n{report.strip()}{tail}"
+        lines = [line for line in report.strip().splitlines() if line.strip()]
+        if not full_report:
+            keep = ("Added ", "Add ", "Removed ", "Remove ", "Delet", "No net", "Error", "Warning")
+            lines = [
+                line for line in lines if line.startswith(keep) and not line.startswith("Add net ")
+            ]
+            added_refs = [line.split()[1] for line in lines if line.startswith("Added ")]
+            lines = [line for line in lines if not line.startswith("Added ")]
+            if added_refs:
+                lines.insert(0, "Added: " + ", ".join(added_refs))
+        return "\n".join([head, *lines]) + tail
 
     @mcp.tool()
     def pcb_set_layer_stackup(preset: str = "jlcpcb-4-7628") -> str:
