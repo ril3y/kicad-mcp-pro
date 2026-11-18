@@ -170,3 +170,38 @@ def add_footprint(project_dir: Path, library: str, name: str, footprint_text: st
         project_dir, "footprint", library, f"${{KIPRJMOD}}/{LIBS_DIRNAME}/{library}.pretty"
     )
     return fp_file
+
+
+def safe_name(text: str) -> str:
+    """Make ``text`` usable as a symbol or footprint name (letters, digits, . _ + -)."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.+-]", "_", text.strip()).strip("_")
+    if not cleaned:
+        raise ValueError(f"Cannot make a library name from {text!r}.")
+    return cleaned
+
+
+def first_symbol(library_text: str) -> tuple[str, str]:
+    """Return ``(name, block)`` of the first top-level symbol in a library text."""
+    match = re.search(r'\(symbol\s+"((?:\\.|[^"\\])*)"', library_text)
+    if match is None:
+        raise ValueError("The library holds no symbol.")
+    block, _ = _extract_block(library_text, match.start())
+    if not block:
+        raise ValueError("The symbol block is not well formed.")
+    return match.group(1), block
+
+
+def rename_symbol_block(block: str, old_name: str, new_name: str) -> str:
+    """Rename a symbol block and its unit sub-symbols (any header spacing)."""
+    check_library_name(new_name)
+    block = re.sub(
+        r'\(symbol\s+"' + re.escape(old_name) + r'"',
+        f'(symbol "{new_name}"',
+        block,
+        count=1,
+    )
+    return re.sub(
+        r'\(symbol\s+"' + re.escape(old_name) + r'_(\d+_\d+)"',
+        lambda match: f'(symbol "{new_name}_{match.group(1)}"',
+        block,
+    )

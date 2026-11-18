@@ -744,7 +744,7 @@ def register(mcp: FastMCP) -> None:
             f"- MPN: {part.mpn}",
             f"- Package: {part.package or '(none)'}",
             f"- Description: {part.description or '(none)'}",
-            f"- Stock: {part.stock:,}",
+            f"- Stock: {part.stock:,}" if part.stock else "- Stock: not reported",
             f"- Unit price: {price}",
             f"- Basic: {'yes' if part.is_basic else 'no'}",
             f"- Preferred: {'yes' if part.is_preferred else 'no'}",
@@ -1140,6 +1140,196 @@ def register(mcp: FastMCP) -> None:
             f"Part {library}:{name} saved to {lib_file} (from {base_library}:{base_symbol})\n"
             f"{summary}\n"
             "If KiCad had the project open before this library existed, reopen the project."
+        )
+
+    @mcp.tool()
+    @headless_compatible
+    def lib_search_passives(
+        kind: str,
+        value: str,
+        package: str = "",
+        min_voltage: float = 0.0,
+        max_tolerance_percent: float = 0.0,
+        dielectric: str = "",
+        max_results: int = 8,
+    ) -> str:
+        """Find a resistor or ceramic capacitor on LCSC / JLCPCB by its value.
+
+        Use this instead of lib_search_components for passives: the keyword search
+        rarely finds an exact value, this one looks the value up directly. JLCPCB
+        basic parts are listed first, then by stock.
+
+        Args:
+            kind: "resistor" or "capacitor".
+            value: The value, e.g. "100nF", "2.2uF", "715k", "30.1k", "10R".
+            package: Package size, e.g. "0603", "1206". Empty for any.
+            min_voltage: Lowest acceptable voltage rating (capacitors).
+            max_tolerance_percent: Highest acceptable tolerance, e.g. 1 for 1 %.
+            dielectric: Capacitor dielectric to require, e.g. "X7R".
+            max_results: How many parts to list.
+
+        Returns:
+            One line per part: LCSC number, manufacturer part number, description,
+            stock, basic or extended, unit price.
+        """
+        client = JLCSearchClient()
+        try:
+            matches = client.search_passives(
+                kind.strip().casefold(),
+                value,
+                package=package,
+                min_voltage=min_voltage,
+                max_tolerance_percent=max_tolerance_percent,
+                dielectric=dielectric,
+                limit=max_results,
+            )
+        except ValueError as exc:
+            return f"Search not run: {exc}"
+        except OSError as exc:
+            return f"The parts search service could not be reached: {exc}"
+        if not matches:
+            return f"No {kind} of {value} matched (package {package or 'any'})."
+        lines = [f"{kind.capitalize()} matches for {value} ({len(matches)} shown):"]
+        for record, _row in matches:
+            stock = f"{record.stock:,}" if record.stock else "not reported"
+            price = f"${record.price:.4f}" if record.price is not None else "n/a"
+            lines.append(
+                f"- {record.lcsc_code} | {record.mpn} | {record.description[:70]} | "
+                f"stock {stock} | {'basic' if record.is_basic else 'extended'} | {price}"
+            )
+        return "\n".join(lines)
+
+    @mcp.tool()
+    @headless_compatible
+    def lib_import_lcsc_part(lcsc_id: str, library: str, name: str = "") -> str:
+        """Bring an LCSC part's symbol, footprint and 3D model into a project library.
+
+        Uses easyeda2kicad to convert the part's EasyEDA drawing. The result is
+        community-drawn data: check the symbol's pins and the footprint against the
+        datasheet before relying on it (lib_get_symbol_info, ds_page_image).
+
+        Args:
+            lcsc_id: LCSC part number, e.g. "C2040".
+            library: Project library to add to (letters, digits, . _ + -). The symbol goes
+                in ``<project>/libs/<library>.kicad_sym``, footprints in
+                ``libs/<library>.pretty`` and 3D models in ``libs/<library>.3dshapes``; the
+                library is listed in the project's library tables.
+            name: Symbol name to use. Defaults to the part's own name with characters KiCad
+                names cannot hold replaced by "_".
+
+        Returns:
+            The symbol and footprint names to place, or an error message.
+        """
+        import shutil
+        import subprocess  # noqa: S404 - runs the pinned easyeda2kicad and kicad-cli only
+        import sys
+        import tempfile
+
+        from ..utils import project_library
+
+        cfg = get_config()
+        if cfg.project_dir is None:
+            return "No active project is configured."
+        code = lcsc_id.strip().upper()
+        if not re.fullmatch(r"C\d+", code):
+            return f"'{lcsc_id}' is not an LCSC part number (expected the form C12345)."
+        try:
+            project_library.check_library_name(library)
+        except ValueError as exc:
+            return str(exc)
+        try:
+            import easyeda2kicad  # noqa: F401
+        except ImportError:
+            return (
+                "easyeda2kicad is not installed. Install it in the kicad-mcp environment: "
+                "pip install 'kicad-mcp-pro[lcsc]'"
+            )
+
+        with tempfile.TemporaryDirectory(prefix="lcsc-import-") as tmp:
+            base = Path(tmp) / "imp"
+            try:
+                run = subprocess.run(  # noqa: S603 - fixed argv, validated part number
+                    [
+                        sys.executable,
+                        "-m",
+                        "easyeda2kicad",
+                        "--full",
+                        "--lcsc_id",
+                        code,
+                        "--output",
+                        str(base),
+                    ],  # fmt: skip
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    cwd=tmp,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return f"easyeda2kicad could not be run: {exc}"
+            sym_file = base.with_suffix(".kicad_sym")
+            pretty = base.with_suffix(".pretty")
+            if not sym_file.exists():
+                detail = (run.stdout + run.stderr).strip().splitlines()[-3:]
+                return f"No symbol was produced for {code}: " + " ".join(detail)
+
+            # Let KiCad rewrite the older file formats easyeda2kicad emits.
+            cli = cfg.kicad_cli
+            if cli is not None and Path(cli).exists():
+                for args in (["sym", "upgrade", str(sym_file)], ["fp", "upgrade", str(pretty)]):
+                    subprocess.run(  # noqa: S603
+                        [str(cli), *args], capture_output=True, timeout=120, check=False
+                    )
+
+            footprints = sorted(pretty.glob("*.kicad_mod")) if pretty.is_dir() else []
+            models_dir = base.with_suffix(".3dshapes")
+            model_target = cfg.project_dir / project_library.LIBS_DIRNAME / f"{library}.3dshapes"
+            if models_dir.is_dir():
+                model_target.mkdir(parents=True, exist_ok=True)
+                for model in models_dir.iterdir():
+                    shutil.copy2(model, model_target / model.name)
+
+            footprint_names: list[str] = []
+            try:
+                for fp_file in footprints:
+                    text = fp_file.read_text(encoding="utf-8", errors="ignore")
+                    text = text.replace(
+                        str(models_dir),
+                        f"${{KIPRJMOD}}/{project_library.LIBS_DIRNAME}/{library}.3dshapes",
+                    )
+                    fp_name = project_library.safe_name(fp_file.stem)
+                    text = re.sub(
+                        r'^\((footprint|module)\s+(?:"[^"]*"|\S+)',
+                        lambda match, n=fp_name: f'({match.group(1)} "{n}"',
+                        text,
+                        count=1,
+                    )
+                    project_library.add_footprint(cfg.project_dir, library, fp_name, text)
+                    footprint_names.append(fp_name)
+
+                source_name, block = project_library.first_symbol(
+                    sym_file.read_text(encoding="utf-8", errors="ignore")
+                )
+                symbol_name = project_library.safe_name(name or source_name)
+                block = project_library.rename_symbol_block(block, source_name, symbol_name)
+                fields = {"LCSC": code}
+                if footprint_names:
+                    fields["Footprint"] = f"{library}:{footprint_names[0]}"
+                block = project_library.set_symbol_fields(block, fields)
+                lib_file = project_library.add_symbol_block(
+                    cfg.project_dir, library, symbol_name, block
+                )
+            except ValueError as exc:
+                return f"Import of {code} failed: {exc}"
+
+        pins = len(re.findall(r"\(pin\s", block))
+        footprint_text = (
+            ", ".join(f"{library}:{fp}" for fp in footprint_names) or "none (not available)"
+        )
+        return (
+            f"Imported {code} as {library}:{symbol_name} ({pins} pins) into {lib_file}\n"
+            f"Footprint: {footprint_text}\n"
+            "Check the pins and the footprint against the datasheet before use."
         )
 
     @mcp.tool()

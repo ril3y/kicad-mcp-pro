@@ -9,7 +9,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Protocol, cast
@@ -108,10 +108,32 @@ def _record_from_jlcsearch(item: dict[str, Any]) -> ComponentRecord:
         package=str(item.get("package", "")),
         description=str(item.get("description", "")),
         stock=int(item.get("stock", 0) or 0),
-        price=float(item["price"]) if item.get("price") is not None else None,
+        price=_first_price(item),
         is_basic=bool(item.get("is_basic", False)),
         is_preferred=bool(item.get("is_preferred", False)),
     )
+
+
+def _first_price(item: dict[str, Any]) -> float | None:
+    for key in ("price", "price1"):
+        if item.get(key) is not None:
+            return float(item[key])
+    return None
+
+
+_VALUE_PATTERN = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([pnuµmkMGR]?)\s*(F|H|ohm|Ω|R)?\s*$")
+_VALUE_SCALE = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "m": 1e-3, "": 1.0, "R": 1.0,
+                "k": 1e3, "M": 1e6, "G": 1e9}  # fmt: skip
+
+
+def parse_passive_value(text: str) -> float:
+    """Turn ``"100nF"``, ``"4.7u"``, ``"715k"``, ``"30.1k"`` or ``"10R"`` into base units."""
+    match = _VALUE_PATTERN.match(text)
+    if match is None:
+        raise ValueError(
+            f"Could not read the value {text!r}. Use forms like 100nF, 4.7uF, 715k, 30.1k, 10R."
+        )
+    return float(match.group(1)) * _VALUE_SCALE[match.group(2)]
 
 
 class JLCSearchClient:
@@ -154,12 +176,72 @@ class JLCSearchClient:
             ]
         return fallback[:limit]
 
+    def search_passives(
+        self,
+        kind: str,
+        value: str,
+        *,
+        package: str = "",
+        min_voltage: float = 0.0,
+        max_tolerance_percent: float = 0.0,
+        dielectric: str = "",
+        limit: int = 10,
+    ) -> list[tuple[ComponentRecord, dict[str, Any]]]:
+        """Find resistors or capacitors by value from the service's per-category lists.
+
+        The keyword search rarely finds ceramic capacitors or exact resistor values;
+        these lists are indexed by value and package. Returns each record with the
+        raw row (voltage, tolerance, dielectric), basic parts and high stock first.
+        """
+        wanted = parse_passive_value(value)
+        if kind == "capacitor":
+            path, rows_key, value_key = "capacitors", "capacitors", "capacitance_farads"
+            # The service matches a number in farads; unit text such as "2.2uF" finds nothing.
+            params: dict[str, object] = {"capacitance": repr(wanted)}
+        elif kind == "resistor":
+            path, rows_key, value_key = "resistors", "resistors", "resistance"
+            params = {"resistance": f"{wanted:g}"}
+        else:
+            raise ValueError("kind must be 'capacitor' or 'resistor'.")
+        params["package"] = package or None
+        _jlcsearch_limiter.acquire()
+        rows = _request_json(f"{self.BASE}/{path}/list.json", params).get(rows_key, [])
+
+        matches: list[tuple[ComponentRecord, dict[str, Any]]] = []
+        for row in rows:
+            actual = float(row.get(value_key) or 0)
+            if abs(actual - wanted) > 0.02 * wanted:
+                continue
+            if min_voltage and float(row.get("voltage_rating") or 0) < min_voltage:
+                continue
+            tolerance = float(row.get("tolerance_fraction") or 0) * 100
+            if max_tolerance_percent and (tolerance == 0 or tolerance > max_tolerance_percent):
+                continue
+            if (
+                dielectric
+                and dielectric.casefold()
+                not in str(
+                    row.get("temperature_coefficient") or row.get("description") or ""
+                ).casefold()
+            ):
+                continue
+            matches.append((_record_from_jlcsearch(row), row))
+        matches.sort(key=lambda pair: (not pair[0].is_basic, -pair[0].stock))
+        return matches[:limit]
+
     def get_part(self, lcsc_code_or_mpn: str) -> ComponentRecord | None:
         query = normalize_lcsc_code(lcsc_code_or_mpn)
         results = self.search(query, only_basic=False, limit=10)
         lcsc_matches = [item for item in results if item.lcsc_code == query]
         if lcsc_matches:
-            return lcsc_matches[0]
+            match = lcsc_matches[0]
+            if match.stock == 0:
+                # The search service often has no stock figure for a part looked up by
+                # code; JLCPCB's own part page does.
+                public = self._get_jlcpcb_public_part(query)
+                if public is not None and public.stock:
+                    match = replace(match, stock=public.stock)
+            return match
 
         raw_query = lcsc_code_or_mpn.strip()
         for item in results:

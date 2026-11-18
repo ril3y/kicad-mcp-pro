@@ -164,3 +164,16 @@ def test_generated_symbol_is_wide_enough_for_facing_pin_names() -> None:
     # Pin ends stay on the 2.54 mm grid.
     pin_x = float(re.search(r"\(pin \w+ \w+\s*\(at (-?[\d.]+)", text).group(1))
     assert abs(pin_x / 2.54 - round(pin_x / 2.54)) < 1e-6
+
+
+def test_imported_symbol_can_be_renamed_whatever_its_header_spacing() -> None:
+    text = (
+        '(kicad_symbol_lib\n  (symbol "AB#1"\n    (property\n      "Value"\n      "AB#1")\n'
+        '    (symbol "AB#1_0_1"\n      (pin passive line)\n    )\n  )\n)\n'
+    )
+    name, block = project_library.first_symbol(text)
+    assert name == "AB#1"
+    renamed = project_library.rename_symbol_block(block, name, project_library.safe_name(name))
+    assert renamed.startswith('(symbol "AB_1"')
+    assert '(symbol "AB_1_0_1"' in renamed
+    assert renamed.count("(") == renamed.count(")")

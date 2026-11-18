@@ -3822,6 +3822,116 @@ def register(mcp: FastMCP) -> None:
         return _attach_snap_warning(combined, snap_to_grid)
 
     @mcp.tool()
+    def sch_draw(
+        symbols: list[dict[str, Any]] | None = None,
+        power: list[dict[str, Any]] | None = None,
+        wires: list[list[float]] | None = None,
+        junctions: list[list[float]] | None = None,
+        labels: list[dict[str, Any]] | None = None,
+        hier_labels: list[dict[str, Any]] | None = None,
+        no_connects: list[list[float]] | None = None,
+        power_ref_start: int = 1,
+    ) -> str:
+        """Draw many schematic items on the active sheet in one call, over IPC.
+
+        The batch form of sch_add_symbol / sch_add_power_symbol / sch_add_wire /
+        sch_add_junction / sch_add_label / sch_add_hierarchical_label /
+        sch_add_no_connect. Every coordinate is in mm and snaps to the 1.27 mm
+        connection grid. Nothing is saved until sch_save().
+
+        Args:
+            symbols: ``{"library", "symbol", "ref", "x", "y", "rotation"?, "unit"?}`` each.
+                Parts are placed exactly as their library defines them; make parts with
+                value and footprint built in using lib_derive_part first.
+            power: ``{"name", "x", "y", "rotation"?}`` each, from the ``power`` library
+                (GND, +3V3, PWR_FLAG ...). The pin is at the given point.
+            wires: ``[x1, y1, x2, y2]`` each.
+            junctions: ``[x, y]`` each; needed where a wire end meets the middle of another.
+            labels: ``{"name", "x", "y"}`` each (local net labels).
+            hier_labels: ``{"name", "x", "y"}`` each (connections to the parent sheet).
+            no_connects: ``[x, y]`` each.
+            power_ref_start: First number for the power symbols' ``#PWR`` references;
+                give each sheet its own range.
+
+        Returns:
+            Counts of what was placed, and the first error if a symbol could not be placed.
+        """
+
+        def point(x: float, y: float) -> tuple[float, float]:
+            return _snap_wire_coord(float(x)), _snap_wire_coord(float(y))
+
+        placed_symbols = 0
+        for entry in symbols or []:
+            x, y = point(entry["x"], entry["y"])
+            try:
+                route_schematic_place_symbol(
+                    library=str(entry["library"]),
+                    symbol_name=str(entry["symbol"]),
+                    x_mm=x,
+                    y_mm=y,
+                    reference=str(entry.get("ref", "")),
+                    unit=int(entry.get("unit", 1)),
+                    orientation_degrees=int(entry.get("rotation", 0)),
+                )
+            except Exception as exc:  # noqa: BLE001 - report which part failed and stop
+                return (
+                    f"Stopped: could not place {entry.get('library')}:{entry.get('symbol')} "
+                    f"as {entry.get('ref', '?')}: {exc}\n"
+                    f"Placed before the error: {placed_symbols} symbol(s). Nothing else was drawn."
+                )
+            placed_symbols += 1
+
+        placed_power = 0
+        for offset, entry in enumerate(power or []):
+            x, y = point(entry["x"], entry["y"])
+            name = str(entry["name"])
+            prefix = "#FLG" if name == "PWR_FLAG" else "#PWR"
+            try:
+                route_schematic_place_symbol(
+                    library="power",
+                    symbol_name=name,
+                    x_mm=x,
+                    y_mm=y,
+                    reference=f"{prefix}{power_ref_start + offset:03d}",
+                    unit=1,
+                    orientation_degrees=int(entry.get("rotation", 0)),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return (
+                    f"Stopped: could not place power symbol {name}: {exc}\n"
+                    f"Placed before the error: {placed_symbols} symbol(s), "
+                    f"{placed_power} power symbol(s). Nothing else was drawn."
+                )
+            placed_power += 1
+
+        protos = []
+        for wire in wires or []:
+            x1, y1 = point(wire[0], wire[1])
+            x2, y2 = point(wire[2], wire[3])
+            protos.append(build_wire_proto(x1, y1, x2, y2))
+        for junction in junctions or []:
+            protos.append(build_junction_proto(*point(junction[0], junction[1])))
+        for entry in labels or []:
+            protos.append(
+                build_local_label_proto(*point(entry["x"], entry["y"]), str(entry["name"]))
+            )
+        for entry in hier_labels or []:
+            protos.append(
+                build_hierarchical_label_proto(*point(entry["x"], entry["y"]), str(entry["name"]))
+            )
+        for marker in no_connects or []:
+            protos.append(build_no_connect_proto(*point(marker[0], marker[1])))
+        if protos:
+            route_schematic_create(protos)
+
+        return (
+            f"Drew {placed_symbols} symbol(s), {placed_power} power symbol(s), "
+            f"{len(wires or [])} wire(s), {len(junctions or [])} junction(s), "
+            f"{len(labels or [])} label(s), {len(hier_labels or [])} hierarchical label(s), "
+            f"{len(no_connects or [])} no-connect(s) over IPC. Call sch_save() to keep them."
+        )
+
+    @mcp.tool()
     def sch_add_bus(
         x1_mm: float,
         y1_mm: float,
