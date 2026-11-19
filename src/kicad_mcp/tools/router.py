@@ -137,6 +137,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "pcb_apply_placement_spec",
             "pcb_move_block",
             "pcb_route_connection",
+            "pcb_fanout_plane_nets",
             "pcb_route_map",
             "pcb_route_open",
             "pcb_route_track",

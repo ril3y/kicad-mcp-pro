@@ -116,4 +116,28 @@ def test_route_tools_are_registered() -> None:
     from kicad_mcp.server import build_server
 
     names = {tool.name for tool in asyncio.run(build_server("full").list_tools())}
-    assert {"pcb_route_connection", "pcb_route_open", "pcb_route_map", "pcb_route_track"} <= names
+    assert {
+        "pcb_route_connection",
+        "pcb_route_open",
+        "pcb_route_map",
+        "pcb_route_track",
+        "pcb_fanout_plane_nets",
+    } <= names
+
+
+def test_nearest_site_finds_the_closest_acceptable_cell_around_obstacles() -> None:
+    top = _layer(
+        [
+            "......",
+            ".##...",
+            ".#....",
+            "......",
+        ]
+    )
+    grid = Grid(columns=6, rows=4, blocked=[top])
+    path = route_planner.nearest_site(
+        grid, (2, 2), lambda column, row: (column, row) == (0, 0), max_steps=10
+    )
+    assert path is not None and path[0] == (2, 2) and path[-1] == (0, 0)
+    assert all(not top[grid.index(c, r)] for c, r in path)
+    assert route_planner.nearest_site(grid, (2, 2), lambda c, r: False, max_steps=10) is None

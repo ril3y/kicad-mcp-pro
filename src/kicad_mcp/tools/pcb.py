@@ -4025,6 +4025,199 @@ def register(mcp: FastMCP) -> None:
         return "\n".join(out)
 
     @mcp.tool()
+    def pcb_fanout_plane_nets(
+        nets: list[str],
+        max_distance_mm: float = 2.5,
+        width_mm: float = 0.0,
+        via_spacing_mm: float = 0.6,
+        cell_mm: float = 0.05,
+    ) -> str:
+        """Give each surface-mount pad of a plane net a short track and a via into its plane.
+
+        For nets carried by copper zones on other layers (ground, a supply): each
+        top-side pad of the net gets the shortest legal stub to the nearest place
+        where a via fits, lies inside one of the net's zones (and not under a
+        higher-priority zone of another net on that layer), and is clear of pads.
+        Legality comes from KiCad's clearance map. Pads that already have a via of
+        the net within 1 mm are skipped. Nothing is saved until pcb_save().
+
+        Args:
+            nets: Plane nets to fan out, e.g. ["GND", "+3V3"].
+            max_distance_mm: Longest stub to look for.
+            width_mm: Stub width; 0 uses the net's own (0.2 mm is tried when the
+                net's own width finds no way out of a fine-pitch pad).
+            via_spacing_mm: Least distance between two new vias' centres.
+            cell_mm: Grid pitch.
+        """
+        hint = _PERSISTENCE_HINT
+        from ..ipc.route import clearance_map
+        from ..utils import route_planner
+
+        board = get_board()
+
+        def zone_shapes(net_name: str) -> list[tuple[int, int, list[tuple[float, float]], str]]:
+            shapes = []
+            for zone in cast(Iterable[Any], board.get_zones()):
+                zone_net = getattr(zone, "net", None)
+                name = str(zone_net.name) if zone_net is not None else ""
+                points = [
+                    (nm_to_mm(node.point.x), nm_to_mm(node.point.y))
+                    for node in zone.outline.outline.nodes
+                ]
+                for layer in zone.layers:
+                    shapes.append((int(layer), int(zone.priority), points, name))
+            return [shape for shape in shapes if shape[0] != BoardLayer.BL_F_Cu]
+
+        def inside(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
+            hit = False
+            for (x1, y1), (x2, y2) in zip(polygon, polygon[1:] + polygon[:1], strict=False):
+                if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                    hit = not hit
+            return hit
+
+        all_zones = zone_shapes("")
+        pads = list(_iter_board_pads_with_refs())
+        lines: list[str] = []
+        created_total = 0
+        for net_name in nets:
+            own = [shape for shape in all_zones if shape[3] == net_name]
+            if not own:
+                lines.append(f"{net_name}: no zone of this net on another layer; skipped.")
+                continue
+
+            def in_plane(x: float, y: float) -> bool:
+                for layer, priority, polygon, _ in own:  # noqa: B023 - used within the same pass
+                    if not inside(x, y, polygon):
+                        continue
+                    covered = any(
+                        other[0] == layer
+                        and other[3] != net_name  # noqa: B023 - used within the same pass
+                        and other[1] > priority
+                        and inside(x, y, other[2])
+                        for other in all_zones
+                    )
+                    if not covered:
+                        return True
+                return False
+
+            net_pads = [
+                (pad, reference)
+                for pad, reference in pads
+                if str(pad.net.name) == net_name and int(pad.pad_type) == 2  # PT_SMD
+            ]
+            pad_circles = []
+            for pad, _ in pads:
+                size = pad.padstack.copper_layers[0].size if pad.padstack.copper_layers else None
+                half = max(nm_to_mm(size.x), nm_to_mm(size.y)) / 2 if size is not None else 0.5
+                pad_circles.append(
+                    (
+                        nm_to_mm(_coord_nm(pad.position, "x")),
+                        nm_to_mm(_coord_nm(pad.position, "y")),
+                        half,
+                    )
+                )
+            taken = [
+                (nm_to_mm(via.position.x), nm_to_mm(via.position.y))
+                for via in cast(Iterable[Any], board.get_vias())
+            ]
+            done = skipped = failed = 0
+            missed: list[str] = []
+            for pad, reference in net_pads:
+                px = nm_to_mm(_coord_nm(pad.position, "x"))
+                py = nm_to_mm(_coord_nm(pad.position, "y"))
+                own_vias = [
+                    (nm_to_mm(via.position.x), nm_to_mm(via.position.y))
+                    for via in cast(Iterable[Any], board.get_vias())
+                    if str(via.net.name) == net_name
+                ]
+                if any(((vx - px) ** 2 + (vy - py) ** 2) ** 0.5 < 1.0 for vx, vy in own_vias):
+                    skipped += 1
+                    continue
+                result = None
+                for width in [width_mm] if width_mm > 0 else [0.0, 0.2]:
+                    grid_map = clearance_map(
+                        net_name, ["F_Cu"], cell_mm=cell_mm, width_mm=width, include_vias=True
+                    )
+                    cell = grid_map["cell"]
+                    origin_x, origin_y = grid_map["origin"]
+                    grid = route_planner.Grid(
+                        columns=grid_map["columns"],
+                        rows=grid_map["rows"],
+                        blocked=[grid_map["blocked"]["F_Cu"]],
+                        via_blocked=grid_map["via_blocked"],
+                    )
+                    via_radius = grid_map["via_diameter"] / 2
+
+                    def accept(column: int, row: int) -> bool:
+                        if grid.via_blocked[grid.index(column, row)]:  # noqa: B023 - used within the same pass
+                            return False
+                        x, y = origin_x + column * cell, origin_y + row * cell  # noqa: B023 - used within the same pass
+                        if any(
+                            ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 < half + via_radius + 0.05  # noqa: B023 - used within the same pass
+                            for cx, cy, half in pad_circles  # noqa: B023 - used within the same pass
+                        ):
+                            return False
+                        if any(
+                            ((x - tx) ** 2 + (y - ty) ** 2) ** 0.5 < via_spacing_mm
+                            for tx, ty in taken  # noqa: B023 - used within the same pass
+                        ):
+                            return False
+                        return in_plane(x, y)
+
+                    start = (
+                        int(round((px - origin_x) / cell)),
+                        int(round((py - origin_y) / cell)),
+                    )
+                    path = route_planner.nearest_site(
+                        grid, start, accept, max_steps=max_distance_mm / cell
+                    )
+                    if path is not None:
+                        result = (path, grid_map, cell, origin_x, origin_y, grid)
+                        break
+                if result is None:
+                    failed += 1
+                    missed.append(f"{reference}.{pad.number}")
+                    continue
+                path, grid_map, cell, origin_x, origin_y, grid = result
+                plan = route_planner.Plan(cells=[(0, c, r) for c, r in path], through_tracks=[])
+                corners = route_planner.simplify(grid, plan)
+                points = [(px, py)] + [
+                    (round(origin_x + c * cell, 4), round(origin_y + r * cell, 4))
+                    for _, c, r in corners[1:]
+                ]
+                net = _find_net(net_name)
+                items: list[Any] = []
+                for (x1, y1), (x2, y2) in zip(points, points[1:], strict=False):
+                    track = Track()
+                    track.start = Vector2.from_xy_mm(x1, y1)
+                    track.end = Vector2.from_xy_mm(x2, y2)
+                    track.layer = BoardLayer.BL_F_Cu
+                    track.width = mm_to_nm(grid_map["track_width"])
+                    track.net = net
+                    items.append(track)
+                via = Via()
+                via.position = Vector2.from_xy_mm(*points[-1])
+                via.diameter = mm_to_nm(grid_map["via_diameter"])
+                via.drill_diameter = mm_to_nm(grid_map["via_drill"])
+                via.type = ViaType.VT_THROUGH
+                via.net = net
+                items.append(via)
+                with board_transaction() as live:
+                    live.create_items(items)
+                taken.append(points[-1])
+                done += 1
+                created_total += 1
+            note = f"{net_name}: {done} pad(s) fanned out, {skipped} already had a via"
+            if failed:
+                note += (
+                    f", {failed} found no via site within {max_distance_mm} mm: {', '.join(missed)}"
+                )
+            lines.append(note + ".")
+        lines.append(hint)
+        del created_total
+        return "\n".join(lines)
+
+    @mcp.tool()
     def pcb_route_connection(
         start: str,
         end: str,

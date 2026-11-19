@@ -295,3 +295,48 @@ def reach(grid: Grid, start: Cell, limit: int = 200_000) -> tuple[int, set[int]]
             todo.append(here)
     del size
     return len(seen), {layer for layer, _, _ in seen}
+
+
+def nearest_site(
+    grid: Grid,
+    start: tuple[int, int],
+    accept: object,
+    *,
+    max_steps: float,
+    layer: int = 0,
+) -> list[tuple[int, int]] | None:
+    """Cheapest free path on one layer from ``start`` to the nearest acceptable cell.
+
+    ``accept(column, row)`` says whether a cell will do (for a fan-out: a free via
+    site inside the net's plane, away from pads). Returns the cells from start to
+    that cell, or None within ``max_steps`` cells of travel.
+    """
+    blocked = grid.blocked[layer]
+    begin = grid.index(*start)
+    best = {begin: 0.0}
+    came: dict[int, int] = {}
+    queue: list[tuple[float, int]] = [(0.0, begin)]
+    while queue:
+        cost, cell = heapq.heappop(queue)
+        if cost > best.get(cell, float("inf")):
+            continue
+        row, column = divmod(cell, grid.columns)
+        if cell != begin and accept(column, row):  # type: ignore[operator]
+            path = [(column, row)]
+            while cell != begin:
+                cell = came[cell]
+                path.append((cell % grid.columns, cell // grid.columns))
+            return path[::-1]
+        for dc, dr, length in _MOVES:
+            next_column, next_row = column + dc, row + dr
+            if not grid.inside(next_column, next_row):
+                continue
+            nxt = grid.index(next_column, next_row)
+            if blocked[nxt]:
+                continue
+            total = cost + length
+            if total <= max_steps and total < best.get(nxt, float("inf")):
+                best[nxt] = total
+                came[nxt] = cell
+                heapq.heappush(queue, (total, nxt))
+    return None
