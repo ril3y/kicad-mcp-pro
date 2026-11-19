@@ -4318,7 +4318,14 @@ def register(mcp: FastMCP) -> None:
 
         costs = layer_costs or {"F_Cu": 1.0, "B_Cu": 1.0}
         keep = set(keep_nets or [])
-        save = cast(Callable[[], None], get_board().save)
+        board_now = get_board()
+
+        def save() -> None:
+            # Pours have to be refilled around the new tracks, or the check reports
+            # every pour as overlapping them.
+            board_now.refill_zones(block=True, max_poll_seconds=120.0)
+            cast(Callable[[], None], board_now.save)()
+
         lines: list[str] = []
         still: list[str] = []
         counts: list[int] = []
