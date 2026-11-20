@@ -4238,6 +4238,113 @@ def register(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
+    def pcb_escape_pins(
+        references: list[str],
+        length_mm: float = 0.8,
+        skip_nets: list[str] | None = None,
+        cell_mm: float = 0.05,
+    ) -> str:
+        """Give each signal pin of fine-pitch parts a short straight stub out of its pin row.
+
+        Run it before routing connections: later tracks then start from the stub
+        ends, and cannot wall a pin in by running along its pin row. Each stub goes
+        straight away from the part's centre, as far as KiCad's clearance map for
+        that pin's net allows (up to ``length_mm`` beyond the pad's outer edge);
+        pins already reached by a track, pins of skipped nets and unconnected pins
+        are left alone. Nothing is saved until pcb_save().
+
+        Args:
+            references: Parts to escape, e.g. ["U2", "U5"].
+            length_mm: Stub length beyond the pad.
+            skip_nets: Nets to leave alone (plane nets already fanned out, for example).
+            cell_mm: Grid pitch of the map the stubs are checked on.
+        """
+        hint = _PERSISTENCE_HINT
+        from ..ipc.route import clearance_map
+
+        board = get_board()
+        wanted = set(references)
+        skip = set(skip_nets or [])
+        centres = {
+            str(footprint.reference_field.text.value): (
+                nm_to_mm(footprint.position.x),
+                nm_to_mm(footprint.position.y),
+            )
+            for footprint in cast(Iterable[Any], board.get_footprints())
+            if str(footprint.reference_field.text.value) in wanted
+        }
+        ends = [
+            (nm_to_mm(track.start.x), nm_to_mm(track.start.y), str(track.net.name))
+            for track in cast(Iterable[Any], board.get_tracks())
+        ] + [
+            (nm_to_mm(track.end.x), nm_to_mm(track.end.y), str(track.net.name))
+            for track in cast(Iterable[Any], board.get_tracks())
+        ]
+        made = skipped = 0
+        blocked: list[str] = []
+        for pad, reference in _iter_board_pads_with_refs():
+            if reference not in wanted:
+                continue
+            net_name = str(pad.net.name)
+            if not net_name or net_name in skip or net_name.startswith("unconnected-"):
+                skipped += 1
+                continue
+            px = nm_to_mm(_coord_nm(pad.position, "x"))
+            py = nm_to_mm(_coord_nm(pad.position, "y"))
+            cx, cy = centres[reference]
+            dx, dy = px - cx, py - cy
+            if abs(dx) < 0.6 and abs(dy) < 0.6:
+                skipped += 1  # the exposed pad under the part
+                continue
+            if any(
+                net == net_name and abs(x - px) < 0.5 and abs(y - py) < 0.5 for x, y, net in ends
+            ):
+                skipped += 1
+                continue
+            size = pad.padstack.copper_layers[0].size if pad.padstack.copper_layers else None
+            sx = nm_to_mm(size.x) if size is not None else 0.3
+            sy = nm_to_mm(size.y) if size is not None else 0.3
+            if abs(dx) >= abs(dy):
+                ux, uy, half = (1.0 if dx > 0 else -1.0), 0.0, max(sx, sy) / 2
+            else:
+                ux, uy, half = 0.0, (1.0 if dy > 0 else -1.0), max(sx, sy) / 2
+            grid = clearance_map(net_name, ["F_Cu"], cell_mm=cell_mm, include_vias=False)
+            cell = grid["cell"]
+            origin_x, origin_y = grid["origin"]
+            layer = grid["blocked"]["F_Cu"]
+            reach = 0.0
+            step = cell
+            distance = half
+            while distance <= half + length_mm + 1e-9:
+                x, y = px + ux * distance, py + uy * distance
+                column = int(round((x - origin_x) / cell))
+                row = int(round((y - origin_y) / cell))
+                inside = 0 <= column < grid["columns"] and 0 <= row < grid["rows"]
+                if not inside or layer[row * grid["columns"] + column]:
+                    break
+                reach = distance
+                distance += step
+            if reach < half + 0.25:
+                blocked.append(f"{reference}.{pad.number}")
+                continue
+            track = Track()
+            track.start = Vector2.from_xy_mm(px, py)
+            track.end = Vector2.from_xy_mm(px + ux * reach, py + uy * reach)
+            track.layer = BoardLayer.BL_F_Cu
+            track.width = mm_to_nm(min(grid["track_width"], 0.2))
+            track.net = _find_net(net_name)
+            with board_transaction() as live:
+                live.create_items([track])
+            made += 1
+        lines = [
+            f"Escaped {made} pin(s); left {skipped} alone (connected, skipped nets, exposed pads)."
+        ]
+        if blocked:
+            lines.append(f"No room straight out for: {', '.join(blocked)}.")
+        lines.append(hint)
+        return "\n".join(lines)
+
+    @mcp.tool()
     def pcb_route_connection(
         start: str,
         end: str,

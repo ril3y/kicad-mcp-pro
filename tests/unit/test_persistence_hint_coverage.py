@@ -54,6 +54,7 @@ _IPC_MUTATING_TOOLS = [
     "pcb_apply_placement_spec",
     "pcb_move_block",
     "pcb_route_connection",
+    "pcb_escape_pins",
     "pcb_fanout_plane_nets",
     "pcb_route_open",
     "pcb_route_track",
