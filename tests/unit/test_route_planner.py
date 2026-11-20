@@ -122,6 +122,7 @@ def test_route_tools_are_registered() -> None:
         "pcb_route_map",
         "pcb_route_track",
         "pcb_fanout_plane_nets",
+        "pcb_escape_pins",
     } <= names
 
 
