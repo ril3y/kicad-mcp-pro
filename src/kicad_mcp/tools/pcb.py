@@ -3770,6 +3770,11 @@ def register(mcp: FastMCP) -> None:
         lines.append(hint)
         return "\n".join(lines)
 
+    from ..utils.route_planner import match_net_rule
+
+    def _board_net_names() -> list[str]:
+        return [str(net.name) for net in cast(Iterable[Any], get_board().get_nets())]
+
     def _route_point(text: str, layer: str) -> tuple[float, float, str]:
         text = text.strip()
         if "," in text:
@@ -3875,11 +3880,26 @@ def register(mcp: FastMCP) -> None:
         keep_nets: set[str],
         width_mm: float,
         cell_mm: float,
+        rule: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Plan one connection and have KiCad's router draw it; never raises."""
         from ..ipc.route import plan_connection, route_track
 
         outcome: dict[str, Any] = {"ok": False, "ripped": [], "reason": ""}
+        rule = rule or {}
+        min_width = float(rule.get("min_width_mm", 0) or 0)
+        if min_width > 0:
+            width_mm = max(width_mm, min_width)
+        if rule.get("layers"):
+            allowed = {str(name).replace(".", "_") for name in rule["layers"]}  # type: ignore[union-attr]
+            layer_costs = {name: cost for name, cost in layer_costs.items() if name in allowed}
+            for name in allowed:
+                layer_costs.setdefault(name, 1.0)
+        if rule.get("no_vias"):
+            if first[2] != last[2]:
+                outcome["reason"] = "its ends are on different layers and the net may not use vias"
+                return outcome
+            layer_costs = {first[2]: 1.0}
         removed: list[Any] = []
         try:
             kept = _kept_copper(keep_nets) if rip_up else None
@@ -3895,7 +3915,7 @@ def register(mcp: FastMCP) -> None:
                 width_mm=width_mm,
                 cell_mm=cell_mm,
             )
-            if not plan["ok"] and width_mm == 0 and plan.get("width", 0) > 0.21:
+            if not plan["ok"] and width_mm == 0 and min_width == 0 and plan.get("width", 0) > 0.21:
                 # A wide net often cannot leave a fine-pitch pad; plan it at 0.2 mm.
                 width_mm = 0.2
                 plan = plan_connection(
@@ -4231,6 +4251,7 @@ def register(mcp: FastMCP) -> None:
         keep_nets: list[str] | None = None,
         width_mm: float = 0.0,
         cell_mm: float = 0.1,
+        net_rules: dict[str, dict[str, Any]] | None = None,
     ) -> str:
         """Plan and route one connection: around parts, through vias, under on other layers.
 
@@ -4256,6 +4277,10 @@ def register(mcp: FastMCP) -> None:
             keep_nets: Nets whose tracks rip_up must not touch.
             width_mm: Track width; 0 uses the net's own.
             cell_mm: Grid pitch of the plan.
+            net_rules: Per-net rules by name pattern, e.g.
+                {"/LED Driver/SW*": {"min_width_mm": 0.8, "no_vias": true}}. A rule may
+                hold min_width_mm (never planned narrower), layers (the only layers
+                allowed), no_vias (stay on one layer) and protect (rip-up keeps it).
         """
         hint = _PERSISTENCE_HINT
         try:
@@ -4274,7 +4299,13 @@ def register(mcp: FastMCP) -> None:
             via_cost_mm=via_cost_mm,
             avoid=avoid,
             rip_up=rip_up,
-            keep_nets=set(keep_nets or []),
+            keep_nets=set(keep_nets or [])
+            | {
+                name
+                for name in _board_net_names()
+                if match_net_rule(name, net_rules).get("protect")
+            },
+            rule=match_net_rule(net_name, net_rules),
             width_mm=width_mm,
             cell_mm=cell_mm,
         )
@@ -4298,6 +4329,7 @@ def register(mcp: FastMCP) -> None:
         max_connections: int = 40,
         passes: int = 3,
         cell_mm: float = 0.1,
+        net_rules: dict[str, dict[str, Any]] | None = None,
     ) -> str:
         """Route every open connection the rule check reports, one by one.
 
@@ -4312,12 +4344,15 @@ def register(mcp: FastMCP) -> None:
             only_nets: Route only these nets.
             max_connections: Stop a pass after this many attempts.
             passes: How many times to re-read the open connections and try again.
+            net_rules: Per-net rules, as for pcb_route_connection.
         """
         hint = _PERSISTENCE_HINT
         from .validation import _entries, _item_texts, _run_drc_report
 
         costs = layer_costs or {"F_Cu": 1.0, "B_Cu": 1.0}
-        keep = set(keep_nets or [])
+        keep = set(keep_nets or []) | {
+            name for name in _board_net_names() if match_net_rule(name, net_rules).get("protect")
+        }
         board_now = get_board()
 
         def save() -> None:
@@ -4375,12 +4410,14 @@ def register(mcp: FastMCP) -> None:
                     net_name, first, last,
                     layer_costs=costs, via_cost_mm=via_cost_mm, avoid=avoid,
                     rip_up=False, keep_nets=keep, width_mm=0.0, cell_mm=cell_mm,
+                    rule=match_net_rule(net_name, net_rules),
                 )  # fmt: skip
                 if not result["ok"] and rip_up:
                     result = _route_connection(
                         net_name, first, last,
                         layer_costs=costs, via_cost_mm=via_cost_mm, avoid=avoid,
                         rip_up=True, keep_nets=keep, width_mm=0.0, cell_mm=cell_mm,
+                        rule=match_net_rule(net_name, net_rules),
                     )  # fmt: skip
                 if result["ok"]:
                     routed += 1

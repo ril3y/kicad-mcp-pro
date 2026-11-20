@@ -340,3 +340,18 @@ def nearest_site(
                 came[nxt] = cell
                 heapq.heappush(queue, (total, nxt))
     return None
+
+
+def match_net_rule(net: str, rules: dict[str, dict[str, object]] | None) -> dict[str, object]:
+    """The routing rule for a net: the first pattern (``*`` and ``?`` wildcards) it matches.
+
+    A rule may hold ``min_width_mm`` (never planned narrower), ``layers`` (the only
+    layers it may use), ``no_vias`` (stay on one layer) and ``protect`` (rip-up
+    must not touch it). Returns an empty rule when nothing matches.
+    """
+    from fnmatch import fnmatchcase
+
+    for pattern, rule in (rules or {}).items():
+        if fnmatchcase(net, pattern):
+            return dict(rule)
+    return {}

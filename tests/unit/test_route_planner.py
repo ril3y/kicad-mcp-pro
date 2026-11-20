@@ -141,3 +141,57 @@ def test_nearest_site_finds_the_closest_acceptable_cell_around_obstacles() -> No
     assert path is not None and path[0] == (2, 2) and path[-1] == (0, 0)
     assert all(not top[grid.index(c, r)] for c, r in path)
     assert route_planner.nearest_site(grid, (2, 2), lambda c, r: False, max_steps=10) is None
+
+
+def test_match_net_rule_takes_the_first_matching_pattern() -> None:
+    rules = {
+        "/LED Driver/SW*": {"min_width_mm": 0.8, "no_vias": True},
+        "/LED Driver/*": {"min_width_mm": 0.3},
+    }
+    assert route_planner.match_net_rule("/LED Driver/SW1", rules)["no_vias"] is True
+    assert route_planner.match_net_rule("/LED Driver/ISP1", rules) == {"min_width_mm": 0.3}
+    assert route_planner.match_net_rule("GND", rules) == {}
+    assert route_planner.match_net_rule("GND", None) == {}
+
+
+def test_route_connection_applies_width_layers_and_no_vias(monkeypatch) -> None:  # noqa: ANN001
+    """pcb_route_connection: a net rule sets the width, the layers, and forbids narrowing."""
+    import asyncio
+
+    from kicad_mcp.ipc import route
+    from kicad_mcp.server import build_server
+    from kicad_mcp.tools import pcb
+
+    calls: list[dict] = []
+
+    def fake_plan(net, first, last, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        calls.append({"net": net, **kwargs})
+        return {"ok": False, "reason": "blocked", "width": kwargs["width_mm"]}
+
+    class Board:
+        def get_nets(self):  # noqa: ANN202
+            return []
+
+    monkeypatch.setattr(route, "plan_connection", fake_plan)
+    monkeypatch.setattr(pcb, "get_board", lambda: Board())
+    server = build_server("full")
+    rules = {"/SW": {"min_width_mm": 0.8, "no_vias": True}}
+
+    async def call(arguments: dict) -> str:
+        result = await server.call_tool("pcb_route_connection", arguments)
+        content = result[0] if isinstance(result, tuple) else result
+        return " ".join(getattr(item, "text", "") for item in content)
+
+    text = asyncio.run(
+        call({"start": "1,1", "end": "5,1", "net": "/SW", "net_rules": rules,
+              "layer_costs": {"F_Cu": 1, "B_Cu": 1}})
+    )  # fmt: skip
+    assert "blocked" in text
+    assert len(calls) == 1  # no second try at 0.2 mm
+    assert calls[0]["width_mm"] == 0.8 and calls[0]["layer_costs"] == {"F_Cu": 1.0}
+
+    text = asyncio.run(
+        call({"start": "1,1", "end": "5,1", "net": "/SW", "net_rules": rules,
+              "start_layer": "F_Cu", "end_layer": "B_Cu"})
+    )  # fmt: skip
+    assert "may not use vias" in text and len(calls) == 1
